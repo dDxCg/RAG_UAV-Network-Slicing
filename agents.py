@@ -59,9 +59,9 @@ class MultiHeadAttention(nn.Module):
 class ActorNetwork(nn.Module):
     """
     Enhanced Actor with modular encoders for different observation components
-    Total obs_dim = 107:
+    Total obs_dim = 80:
       - UAV state: 5 dims
-      - DA info: 90 dims (9 DAs x 10 features)
+      - DA info: 63 dims (9 DAs x 7 features)
       - Handover state: 4 dims
       - Surrounding: 8 dims
     """
@@ -374,7 +374,7 @@ class BCWeightScheduler:
         return (f"BCWeightScheduler(current={self.get_weight():.3f}, "
                 f"step={self.current_step}/{self.transition_steps})")
 
-class MADRLAgent:
+class MADDPGAgent:
     """Multi-Agent Deep Reinforcement Learning Agent for UAV Network Slicing"""
     def __init__(self, 
                  num_agents: int,
@@ -396,24 +396,6 @@ class MADRLAgent:
         self.lr_actor = self.config.maddpg.actor_lr
         self.lr_critic = self.config.maddpg.critic_lr
         self.device = torch.device(device)
-
-        # if device == 'auto':
-        #     if torch.cuda.is_available():
-        #         self.device = torch.device('cuda')
-        #         print(f"✓ Using GPU: {torch.cuda.get_device_name(0)}")
-                
-        #         # Enable optimizations
-        #         torch.backends.cudnn.benchmark = True  # Auto-tune kernels
-        #         torch.backends.cudnn.deterministic = False  # Faster but non-deterministic
-                
-        #         # Set memory allocator settings
-        #         torch.cuda.empty_cache()
-                
-        #     else:
-        #         self.device = torch.device('cpu')
-        #         print("⚠️  GPU not available, using CPU")
-        # else:
-        #     self.device = torch.device(device)
     
 
         # Initialize actor networks for each agent
@@ -455,7 +437,6 @@ class MADRLAgent:
         self.buffer = ExperienceBuffer(self.buffer_size)
         
         # Exploration parameters
-        
         self.exploration_noise = self.config.exploration.gaussian_init
         self.re_exploration_noise = self.config.exploration.gaussian_2nd
         self.noise_decay = self.config.exploration.gaussian_decay
@@ -496,7 +477,7 @@ class MADRLAgent:
                 
                 # Power: small Gaussian noise
                 power_noise = np.random.normal(0, self.exploration_noise, size=1)
-                action[3:4] = np.clip(action[3:4] + power_noise, 0.05, 1)
+                action[3] = np.clip(action[3] + power_noise, 0.05, 1)
                 
                 # Bandwidth: Dirichlet noise for valid distribution
                 if len(action) > 4:
@@ -524,97 +505,7 @@ class MADRLAgent:
 
         self.buffer.push((obs_array, action_array, greedy_action_array, reward, next_obs_array, done))
 
-    def train(self):
-        """Train the MADRL agent"""
-        if len(self.buffer) < self.batch_size:
-            return {}
-        
-        # Set all models to training mode
-        for actor in self.actors:
-            actor.train()
-        for actor_target in self.actor_targets:
-            actor_target.eval() 
-        self.critic.train()
-        self.critic_target.eval()
-        
-        # Sample batch
-        states, actions, greedy_actions, rewards, next_states, dones = self.buffer.sample(self.batch_size)
-        states = states.to(self.device)
-        actions = actions.to(self.device)
-        rewards = rewards.to(self.device).unsqueeze(-1)
-        next_states = next_states.to(self.device)
-        dones = dones.to(self.device).unsqueeze(-1)
-        
-        # Reshape for individual agents
-        states_per_agent = states.view(self.batch_size, self.num_agents, self.obs_dim)
-        actions_per_agent = actions.view(self.batch_size, self.num_agents, self.action_dim)
-        greedy_actions_per_agent = greedy_actions.view(self.batch_size, self.num_agents, self.action_dim)
-        next_states_per_agent = next_states.view(self.batch_size, self.num_agents, self.obs_dim)
-        
-        # Update critic
-        with torch.no_grad():
-            # Get target actions from target actors
-            current_actionss = []
-            for i in range(self.num_agents):
-                current_actions = self.actor_targets[i](next_states_per_agent[:, i, :])
-                current_actionss.append(current_actions)
-            
-            current_actionss = torch.stack(current_actionss, dim=1)
-            current_actionss = current_actionss.view(self.batch_size, -1)
-            
-            # Compute target Q-value
-            target_q = self.critic_target(next_states_per_agent.view(self.batch_size, -1), current_actionss)
-            target_value = rewards + (1 - dones) * self.gamma * target_q
-
-        # Current Q-value
-        current_q = self.critic(states, actions)
-        
-        # Critic loss
-        critic_loss = F.mse_loss(current_q, target_value)
-        
-        self.critic_optimizer.zero_grad()
-        critic_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1.0)
-        self.critic_optimizer.step()
-        
-        # Update actors
-        actor_losses = []
-
-        for i in range(self.num_agents):
-            # Get current actions from all agents
-            current_actions = []
-            for j in range(self.num_agents):
-                if j == i:
-                    # For agent i, use its actor network
-                    action = self.actors[j](states_per_agent[:, j, :])
-                else:
-                    # For other agents, use their current actions (detached)
-                    action = actions_per_agent[:, j, :].detach()
-                current_actions.append(action)
-            
-            current_actions = torch.stack(current_actions, dim=1)
-            current_actions = current_actions.view(self.batch_size, -1)
-            
-            # Actor loss (negative Q-value for gradient descent)
-            actor_loss = -self.critic(states, current_actions).mean() / 200
-            
-            self.actor_optimizers[i].zero_grad()
-            actor_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.actors[i].parameters(), 1.0)
-            self.actor_optimizers[i].step()
-            
-            actor_losses.append(actor_loss.item())
-        
-        # Soft update target networks
-        self._soft_update()
-        
-        return {
-            'actor_losses': actor_losses,
-            'critic_loss': critic_loss.item()
-        }
-    
-
-    def train_rl_with_bc_regularization(self, bc_weight):
+    def train(self, bc_weight):
         """
         RL training with BC regularization to prevent catastrophic forgetting
         
@@ -813,45 +704,383 @@ class MADRLAgent:
         self.exploration_noise = checkpoint['exploration_noise']
         print(f"Models loaded from {path}")
 
-    # def load_models(self, path: str, use_averaged_actors: bool = True):
-    #     """Load all models, optionally using averaged actor parameters"""
-    #     checkpoint = torch.load(path, map_location=self.device, weights_only=True)
+    def reset_optimizer_state(self):
+        """Reset Adam's momentum when switching from BC to RL"""
+        print("Resetting optimizer state for BC → RL transition...")
         
-    #     self.critic.load_state_dict(checkpoint['critic'])
-    #     self.critic_target.load_state_dict(checkpoint['critic_target'])
-    #     self.critic_optimizer.load_state_dict(checkpoint['critic_optimizer'])
+        # Reset actor optimizers
+        for i, opt in enumerate(self.actor_optimizers):
+            state = opt.state_dict()
+            # Clear the state dict (momentum, variance)
+            opt.state_dict()['state'] = {}
+            opt.load_state_dict(state)
+            print(f"  Actor {i} optimizer reset")
         
-    #     if use_averaged_actors:
-    #         # Create averaged actor state dict
-    #         averaged_actor_state = {}
-    #         actor_state_dicts = checkpoint['actors']
+        # Also reset critic optimizer
+        state = self.critic_optimizer.state_dict()
+        self.critic_optimizer.state_dict()['state'] = {}
+        self.critic_optimizer.load_state_dict(state)
+        print("  Critic optimizer reset")
+
+        # Also reset exploration noise to initial value
+        self.exploration_noise = self.config.exploration.gaussian_init
+        print(f"  Exploration noise reset to {self.exploration_noise}")
+
+    def prepare_for_rl_training(self):
+        """CRITICAL: Reset everything for RL"""
+        
+        print("="*60)
+        print("PREPARING FOR RL (Preventing Catastrophic Forgetting)")
+        print("="*60)
+        
+        # 1. CREATE FRESH OPTIMIZERS (no BC momentum!)
+        self.actor_optimizers = [
+            optim.Adam(actor.parameters(), lr=1e-5)  # Fresh state!
+            for actor in self.actors
+        ]
+        
+        self.critic_optimizer = optim.Adam(
+            self.critic.parameters(), 
+            lr=3e-5
+        )
+        
+        # 2. Initialize Q-value normalization
+        self.q_mean_ema = 0.0
+        self.q_std_ema = 1.0
+        
+        print("✓ Created fresh optimizers (no BC momentum)")
+        print("✓ Initialized Q-value normalization")
+        print("="*60)
+
+class MADDPGAgent:
+    """Multi-Agent Deep Reinforcement Learning Agent for UAV Network Slicing"""
+    def __init__(self, 
+                 num_agents: int,
+                 obs_dim: int,
+                 action_dim: int,
+                 training: bool = True,
+                 device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
+                 config_path = "./config/agents/default.yaml"):
+        
+        
+        self.config = Configuration(config_path)
+        self.num_agents = num_agents
+        self.obs_dim = obs_dim
+        self.action_dim = action_dim
+        self.gamma = self.config.maddpg.gamma
+        self.tau = self.config.maddpg.tau
+        self.buffer_size = self.config.maddpg.buffer_size
+        self.batch_size = self.config.maddpg.batch_size
+        self.lr_actor = self.config.maddpg.actor_lr
+        self.lr_critic = self.config.maddpg.critic_lr
+        self.device = torch.device(device)
+    
+
+        # Initialize actor networks for each agent
+        self.actors = []
+        self.actor_targets = []
+        self.actor_optimizers = []
+        
+
+        for i in range(num_agents):
+            actor = ActorNetwork(obs_dim, action_dim).to(self.device)
+            actor_target = ActorNetwork(obs_dim, action_dim).to(self.device)
+            actor_target.load_state_dict(actor.state_dict())
             
-    #         for key in actor_state_dicts[0].keys():
-    #             # Stack and average parameters
-    #             stacked_params = torch.stack([
-    #                 actor_state_dicts[i][key] 
-    #                 for i in range(len(actor_state_dicts))
-    #             ])
-    #             averaged_actor_state[key] = torch.mean(stacked_params, dim=0)
-            
-    #         # Load averaged parameters into ALL actors
-    #         for i in range(self.num_agents):
-    #             self.actors[i].load_state_dict(averaged_actor_state)
-    #             self.actor_targets[i].load_state_dict(averaged_actor_state)
-            
-    #         print(f"All actors loaded with averaged parameters from {len(actor_state_dicts)} agents")
-    #     else:
-    #         # Load individual actor parameters
-    #         for i in range(self.num_agents):
-    #             self.actors[i].load_state_dict(checkpoint['actors'][i])
-    #             self.actor_targets[i].load_state_dict(checkpoint['actor_targets'][i])
+            self.actors.append(actor)
+            self.actor_targets.append(actor_target)
+            if self.device.type == 'cuda':
+                self.actor_optimizers.append(
+                    optim.AdamW(actor.parameters(), lr=self.lr_actor, fused=True)  # Fused for speed!
+                )
+            else:
+                self.actor_optimizers.append(
+                    optim.Adam(actor.parameters(), lr=self.lr_actor)
+                )
+
+        # Initialize centralized critic
+        self.critic = CriticNetwork(obs_dim, action_dim, num_agents).to(self.device)
+        self.critic_target = CriticNetwork(obs_dim, action_dim, num_agents).to(self.device)
+        self.critic_target.load_state_dict(self.critic.state_dict())
+        if self.device.type == 'cuda':
+            self.critic_optimizer = optim.AdamW(
+                self.critic.parameters(), lr=self.lr_critic, fused=True
+            )
+        else:
+            self.critic_optimizer = optim.Adam(
+                self.critic.parameters(), lr=self.lr_critic
+            )
         
-    #     # Load optimizers (always individual)
-    #     for i in range(self.num_agents):
-    #         self.actor_optimizers[i].load_state_dict(checkpoint['actor_optimizers'][i])
+        # Experience buffer
+        self.buffer = ExperienceBuffer(self.buffer_size)
         
-    #     self.exploration_noise = checkpoint['exploration_noise']
-    #     print(f"Models loaded from {path}")
+        # Exploration parameters
+        self.exploration_noise = self.config.exploration.gaussian_init
+        self.re_exploration_noise = self.config.exploration.gaussian_2nd
+        self.noise_decay = self.config.exploration.gaussian_decay
+        self.min_noise = self.config.exploration.gaussian_min
+        if not training:
+            self.exploration_noise = 0.0  # No exploration during evaluation
+
+        self.pin_memory = (self.device.type == 'cuda')
+        
+        print(f"  Batch size: {self.batch_size}")
+        print(f"  Pin memory: {self.pin_memory}")
+
+        # ADD THIS for verification:
+        print(f"🎮 Agent Device: {self.device}")
+        if self.device.type == 'cuda':
+            print(f"   GPU: {torch.cuda.get_device_name(0)}")
+            print(f"   Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        else:
+            print("   ⚠️  WARNING: Using CPU! Training will be slow!")
+
+    def select_actions(self, observations: Dict[int, np.ndarray], 
+                    explore: bool = True) -> Dict[int, np.ndarray]:
+        actions = {}
+        
+        for agent_id, obs in observations.items():
+            obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(self.device)
+            self.actors[agent_id].eval()
+            
+            with torch.no_grad():
+                action = self.actors[agent_id](obs_tensor).cpu().numpy()[0]
+            
+            # Add SMALL additive noise (not replacement)
+            if explore and self.exploration_noise > 0.001:
+                # Position: small Gaussian noise
+                pos_noise = np.random.normal(0, 5 * self.exploration_noise, size=3)
+                action[:3] = np.clip(action[:3] + pos_noise, -1, 1)
+                # print(action[:3])
+                
+                # Power: small Gaussian noise
+                power_noise = np.random.normal(0, self.exploration_noise, size=1)
+                action[3] = np.clip(action[3] + power_noise, 0.05, 1)
+                
+                # Bandwidth: Dirichlet noise for valid distribution
+                if len(action) > 4:
+                    noise = np.random.uniform(0, 1, size=len(action[4:]))
+                    noise = noise / noise.sum()
+                    action[4:] = (1 - self.exploration_noise) * action[4:] + self.exploration_noise * noise
+                    action[4:] = action[4:] / action[4:].sum()
+                
+            actions[agent_id] = action
+        
+        return actions
+
+    def store_transition(self, observations: Dict[int, np.ndarray],
+                        actions: Dict[int, np.ndarray],
+                        greedy_actions: Dict[int, np.ndarray],
+                        reward: float,
+                        next_observations: Dict[int, np.ndarray],
+                        done: bool):
+        """Store transition in replay buffer"""
+        # Convert dictionaries to arrays
+        obs_array = np.concatenate([observations[i] for i in range(self.num_agents)])
+        action_array = np.concatenate([actions[i] for i in range(self.num_agents)])
+        greedy_action_array = np.concatenate([greedy_actions[i] for i in range(self.num_agents)])
+        next_obs_array = np.concatenate([next_observations[i] for i in range(self.num_agents)])
+
+        self.buffer.push((obs_array, action_array, greedy_action_array, reward, next_obs_array, done))
+
+    def train(self, bc_weight):
+        """
+        RL training with BC regularization to prevent catastrophic forgetting
+        
+        Args:
+            bc_weight: Weight for BC loss (0.0-1.0)
+                    - 0.0 = pure RL (dangerous!)
+                    - 0.5 = balanced BC + RL (recommended)
+                    - 1.0 = pure BC (no improvement)
+        
+        Returns:
+            Dictionary with training metrics
+        """
+        if len(self.buffer) < self.batch_size:
+            return {}
+        
+        # Set to training mode
+        for actor in self.actors:
+            actor.train()
+        for actor_target in self.actor_targets:
+            actor_target.eval()
+        self.critic.train()
+        self.critic_target.eval()
+        
+        # Sample batch
+        states, actions, greedy_actions, rewards, next_states, dones = self.buffer.sample(self.batch_size)
+        states = states.to(self.device)
+        actions = actions.to(self.device)
+        greedy_actions = greedy_actions.to(self.device)
+        rewards = rewards.to(self.device).unsqueeze(-1)
+        next_states = next_states.to(self.device)
+        dones = dones.to(self.device).unsqueeze(-1)
+        
+        # Reshape for individual agents
+        states_per_agent = states.view(self.batch_size, self.num_agents, self.obs_dim)
+        actions_per_agent = actions.view(self.batch_size, self.num_agents, self.action_dim)
+        greedy_actions_per_agent = greedy_actions.view(self.batch_size, self.num_agents, self.action_dim)
+        next_states_per_agent = next_states.view(self.batch_size, self.num_agents, self.obs_dim)
+        
+        # ============================================
+        # Update Critic (Standard MADDPG)
+        # ============================================
+        with torch.no_grad():
+            # Get target actions from target actors
+            current_actionss = []
+            for i in range(self.num_agents):
+                current_actions = self.actor_targets[i](next_states_per_agent[:, i, :])
+                current_actionss.append(current_actions)
+            
+            current_actionss = torch.stack(current_actionss, dim=1)
+            current_actionss_flat = current_actionss.view(self.batch_size, -1)
+            
+            # Compute target Q-value
+            target_q = self.critic_target(
+                next_states_per_agent.view(self.batch_size, -1), 
+                current_actionss_flat
+            )
+            target_value = rewards + self.gamma * target_q
+        
+        # Current Q-value
+        current_q = self.critic(states, actions)
+        
+        # Critic loss
+        critic_loss = F.mse_loss(current_q, target_value)
+        
+        # Update critic
+        self.critic_optimizer.zero_grad()
+        critic_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1.0)
+        self.critic_optimizer.step()
+        
+        # ============================================
+        # Update Actors with BC Regularization
+        # ============================================
+        actor_losses = []
+        rl_losses = []
+        bc_losses = []
+        
+        for i in range(self.num_agents):
+            # Get current actions from all agents
+            current_actions = []
+            for j in range(self.num_agents):
+                if j == i:
+                    # For agent i, use its actor network
+                    action = self.actors[j](states_per_agent[:, j, :])
+                else:
+                    # For other agents, use their actions from buffer (detached)
+                    action = actions_per_agent[:, j, :].detach()
+                current_actions.append(action)
+            
+            current_actions = torch.stack(current_actions, dim=1)
+            current_actions_flat = current_actions.view(self.batch_size, -1)
+            
+            # Get actor's predicted action
+            greedy_action = greedy_actions_per_agent[:, i, :].detach()
+            
+            
+            # ============================================
+            # RL Loss: Maximize Q-values
+            # ============================================
+            q_values = self.critic(states, current_actions_flat)
+            rl_loss_raw = -q_values.mean()
+            
+            # Normalize RL loss to BC scale
+            # Option 1: Simple scaling
+            rl_loss_normalized = rl_loss_raw / 20000.0  # Adjust based on your Q-value scale
+            
+            
+            # ============================================
+            # BC Loss: Stay close to greedy
+            # ============================================
+            # Overall BC loss
+            # bc_loss_overall = F.mse_loss(greedy_action, current_actions)
+            
+            # Component-specific BC losses (for better control)
+            action = self.actors[i](states_per_agent[:, i, :])
+            position_bc = F.mse_loss(greedy_action[:, :3], action[:, :3])
+            power_bc = F.mse_loss(greedy_action[:, 3:4], action[:, 3:4])
+            bandwidth_bc = F.mse_loss(greedy_action[:, 4:], action[:, 4:])
+            
+            # Weighted BC loss (emphasize bandwidth since it's critical)
+            bc_loss = (
+                0.3 * position_bc + 
+                0.2 * power_bc + 
+                0.5 * bandwidth_bc
+            )
+            
+            # ============================================
+            # Combined Loss
+            # ============================================
+            total_loss = (1 - bc_weight) * rl_loss_normalized + bc_weight * bc_loss
+            
+            # Backward pass
+            self.actor_optimizers[i].zero_grad()
+            total_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.actors[i].parameters(), 1.0)
+            self.actor_optimizers[i].step()
+            
+            # Record losses
+            actor_losses.append(total_loss.item())
+            rl_losses.append(rl_loss_normalized.item())
+            bc_losses.append(bc_loss.item())
+        
+        # Soft update target networks
+        self._soft_update()
+        
+        return {
+            'actor_losses': actor_losses,
+            'critic_loss': critic_loss.item(),
+            'rl_losses': rl_losses,
+            'bc_losses': bc_losses,
+            'bc_weight': bc_weight
+        }
+
+    def _soft_update(self):
+        """Soft update target networks"""
+        # Update critic target
+        for param, target_param in zip(self.critic.parameters(), 
+                                      self.critic_target.parameters()):
+            target_param.data.copy_(self.tau * param.data + 
+                                  (1 - self.tau) * target_param.data)
+        
+        # Update actor targets
+        for i in range(self.num_agents):
+            for param, target_param in zip(self.actors[i].parameters(), 
+                                          self.actor_targets[i].parameters()):
+                target_param.data.copy_(self.tau * param.data + 
+                                      (1 - self.tau) * target_param.data)
+    
+    def save_models(self, path: str):
+        """Save all models"""
+        checkpoint = {
+            'critic': self.critic.state_dict(),
+            'critic_target': self.critic_target.state_dict(),
+            'critic_optimizer': self.critic_optimizer.state_dict(),
+            'actors': [actor.state_dict() for actor in self.actors],
+            'actor_targets': [actor.state_dict() for actor in self.actor_targets],
+            'actor_optimizers': [opt.state_dict() for opt in self.actor_optimizers],
+            'exploration_noise': self.exploration_noise
+        }
+        torch.save(checkpoint, path)
+        print(f"Models saved to {path}")
+    
+    def load_models(self, path: str):
+        """Load all models"""
+        checkpoint = torch.load(path, map_location=self.device, weights_only=True)
+        
+        self.critic.load_state_dict(checkpoint['critic'])
+        self.critic_target.load_state_dict(checkpoint['critic_target'])
+        self.critic_optimizer.load_state_dict(checkpoint['critic_optimizer'])
+        
+        for i in range(self.num_agents):
+            self.actors[i].load_state_dict(checkpoint['actors'][i])
+            self.actor_targets[i].load_state_dict(checkpoint['actor_targets'][i])
+            self.actor_optimizers[i].load_state_dict(checkpoint['actor_optimizers'][i])
+        
+        self.exploration_noise = checkpoint['exploration_noise']
+        print(f"Models loaded from {path}")
 
     def reset_optimizer_state(self):
         """Reset Adam's momentum when switching from BC to RL"""
@@ -903,4 +1132,35 @@ class MADRLAgent:
 
     
 
-                                             
+if __name__ == "__main__":
+    from torchview import draw_graph
+
+    NUM_AGENTS = 3       # Lưu ý: Đảm bảo số này khớp với slide (5 UAVs)
+    STATE_DIM = 112      # Kích thước state của 1 UAV
+    ACTION_DIM = 13      # Kích thước action của 1 UAV
+    BATCH_SIZE = 1       # Để vẽ hình thì batch size là 1
+
+    # 3. Tạo Model
+    model = CriticNetwork(state_dim=STATE_DIM, action_dim=ACTION_DIM, num_agents=NUM_AGENTS)
+
+    # 4. Tạo Dummy Inputs (Dữ liệu giả)
+    # Critic cần 2 inputs riêng biệt
+    dummy_states = torch.randn(BATCH_SIZE, NUM_AGENTS, STATE_DIM)
+    dummy_actions = torch.randn(BATCH_SIZE, NUM_AGENTS, ACTION_DIM)
+
+    # 5. Vẽ đồ thị
+    # Lưu ý: Phải truyền input_data dưới dạng tuple (state, action)
+    model_graph = draw_graph(
+        model, 
+        input_data=(dummy_states, dummy_actions), 
+        graph_name="Critic_Architecture",
+        expand_nested=True,
+        save_graph=False,
+    )
+
+    # Chỉnh lại hướng vẽ (LR: Trái sang Phải, TB: Trên xuống Dưới)
+    model_graph.visual_graph.attr(rankdir='TB') 
+
+    # XUẤT RA PDF (Vector)
+    model_graph.visual_graph.render("critic_viz_high_res", format="pdf", cleanup=True)
+    print("Đã xuất file PDF sắc nét: critic_viz_high_res.pdf")

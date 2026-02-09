@@ -1,9 +1,10 @@
-function fig = compare_agents(results_dir)
+function fig = plot_performance_comparisons(results_dir)
     % Generate comparison plots for multiple agents
     % Input: results_dir - directory containing CSV files
     % Output: fig - figure handle
     
     % Find all CSV files in the directory
+    training_steps_file = fullfile(results_dir, 'training_reward/step_metrics.csv');
     csv_files = dir(fullfile(results_dir, '*.csv'));
     
     if isempty(csv_files)
@@ -75,6 +76,16 @@ function fig = compare_agents(results_dir)
         end
     end
 
+    % Load the training steps if available
+    if isfile(training_steps_file)
+        try
+            training_data = readtable(training_steps_file);
+            fprintf('Loaded training steps from %s\n', training_steps_file);
+        catch ME
+            fprintf('⚠️  Error loading training steps: %s\n', ME.message);
+        end
+    end
+
     if isempty(results_list)
         error('No valid agent results could be loaded');
     end
@@ -87,7 +98,7 @@ function fig = compare_agents(results_dir)
     fprintf('Generating comparison plots...\n');
     
     % Create figure with subplots
-    fig = figure('Position', [100, 100, 1600, 880]);
+    fig = figure('Position', [100, 100, 1800, 800]);
     
     % Standard highlighting colors (matching matplotlib defaults)
     standard_colors = [
@@ -139,31 +150,43 @@ function fig = compare_agents(results_dir)
                  'LineWidth', 2.5, 'DisplayName', result.agent_name);
         end
     end
-    title('Step Rewards', 'FontSize', 12, 'FontWeight', 'bold');
-    xlabel('Step', 'FontWeight', 'bold');
+    % title('Step Rewards', 'FontSize', 12, 'FontWeight', 'bold');
+    xlabel('Simulation step', 'FontWeight', 'bold');
     ylabel('Reward', 'FontWeight', 'bold');
-    legend('Location', 'best', 'FontSize', 11);
+    legend('Location', 'best', 'FontSize', 11, 'NumColumns', 2);
+    ax = gca;
+    ax.FontSize = 12;
     grid on;
     alpha(gca, 0.3);
     hold off;
     
-    % 2. Cumulative Rewards
-    subplot(2, 3, 2);
-    hold on;
-    for i = 1:num_agents
-        result = results_list(i);
-        steps = result.metrics.steps;
-        cumulative_rewards = result.metrics.cumulative_rewards;
-        plot(steps, cumulative_rewards, 'Color', colors(i,:), ...
-             'LineWidth', 2.5, 'DisplayName', result.agent_name);
-    end
-    title('Cumulative Rewards', 'FontSize', 12, 'FontWeight', 'bold');
-    xlabel('Step', 'FontWeight', 'bold');
-    ylabel('Cumulative Reward', 'FontWeight', 'bold');
-    legend('Location', 'best', 'FontSize', 11);
-    grid on;
-    alpha(gca, 0.3);
-    hold off;
+    % 2. Training Rewards
+    % subplot(2, 3, 2);
+    % hold on;
+    % window = min(1500, floor(height(training_data) / 10));
+    % if window > 1
+    %     smoothed = movmean(training_data.rewards, window);
+    %     plot(training_data.steps, smoothed, 'Color',colors(1,:), ...
+    %          'LineWidth', 2.5, 'DisplayName', 'Training Reward');
+    %     % plot(training_data.steps, training_data.rewards, 'Color', [colors(1,:), 0.2], 'LineWidth', 1, ...
+    %     %      'HandleVisibility', 'off');
+
+    % else
+    %     plot(training_data.steps, training_data.rewards, 'k-', ...
+    %          'LineWidth', 2.5, 'DisplayName', 'Training Reward');
+    % end
+    % % title('Training Rewards', 'FontSize', 12, 'FontWeight', 'bold');
+    % xlabel('Training step', 'FontWeight', 'bold');
+    % ylabel('Reward', 'FontWeight', 'bold');
+    % xticks(0:2.5e5:10e5);  % Grid at 0, 2×10^5, 4×10^5, ..., 10×10^5
+    % yticks(0:0.4:1.6);   % Grid at 0, 0.4, 0.8, 1.2, 1.6
+    % legend('Location', 'best', 'FontSize', 11);
+    % ax = gca;
+    % ax.FontSize = 12;
+    % grid on;
+    % alpha(gca, 0.3);
+    % hold off;
+    
     
     % 3. QoS Satisfaction
     subplot(2, 3, 3);
@@ -189,11 +212,13 @@ function fig = compare_agents(results_dir)
                  'LineWidth', 1, 'DisplayName', result.agent_name);
         end
     end
-    title('QoS Satisfaction', 'FontSize', 12, 'FontWeight', 'bold');
+    % title('QoS Satisfaction', 'FontSize', 12, 'FontWeight', 'bold');
     xlabel('Step', 'FontWeight', 'bold');
-    ylabel('QoS Satisfaction', 'FontWeight', 'bold');
-    ylim([0, 1.05]);
-    legend('Location', 'best', 'FontSize', 11');
+    ylabel('QoS Satisfaction Reward', 'FontWeight', 'bold');
+    ylim([0, 0.85]);
+    legend('Location', 'best', 'FontSize', 11);
+    ax = gca;
+    ax.FontSize = 12;
     grid on;
     alpha(gca, 0.3);
     hold off;
@@ -221,11 +246,13 @@ function fig = compare_agents(results_dir)
                  'LineWidth', 2, 'DisplayName', result.agent_name);
         end
     end
-    title('Energy Consumption Rate', 'FontSize', 12, 'FontWeight', 'bold');
+    % title('Energy Consumption', 'FontSize', 12, 'FontWeight', 'bold');
     xlabel('Step', 'FontWeight', 'bold');
-    ylabel('Energy Consumption (Lower is Better)');
+    ylabel('Energy Penalty', 'FontWeight', 'bold');
     ylim([0, 1])
     legend('Location', 'best', 'FontSize', 11');
+    ax = gca;
+    ax.FontSize = 12;
     grid on;
     alpha(gca, 0.3);
     hold off;
@@ -239,7 +266,7 @@ function fig = compare_agents(results_dir)
         fairness = result.metrics.fairness;
         
         % Smooth
-        window = min(80, floor(length(fairness) / 10));
+        window = min(100, floor(length(fairness) / 10));
         if window < 1, window = 1; end
         
         if window > 1
@@ -253,11 +280,13 @@ function fig = compare_agents(results_dir)
                  'LineWidth', 2, 'DisplayName', result.agent_name);
         end
     end
-    title('Fairness Index', 'FontSize', 12, 'FontWeight', 'bold');
+    % title('Fairness Reward', 'FontSize', 12, 'FontWeight', 'bold');
     xlabel('Step', 'FontWeight', 'bold');
     ylabel('Fairness', 'FontWeight', 'bold');
-    ylim([0, 0.8]);
+    ylim([0, 0.7]);
     legend('Location', 'best', 'FontSize', 11');
+    ax = gca;
+    ax.FontSize = 12;
     grid on;
     alpha(gca, 0.3);
     hold off;
@@ -294,11 +323,12 @@ function fig = compare_agents(results_dir)
     title('Performance Summary (Normalized)', 'FontSize', 12, 'FontWeight', 'bold');
     set(gca, 'XTick', x);
     set(gca, 'XTickLabel', metrics_names);
+    set(gca, 'FontSize', 13);
     xlim([0.3, 4.7])
     ylim([0, 1.1]);
     legend('Location', 'best', 'FontSize', 11');
     grid on;
-    alpha(gca, 0.8);
+    alpha(gca, 0.9);
     hold off;
     
     % Save figure

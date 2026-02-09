@@ -1,0 +1,230 @@
+# config/agents/mappo_default.yaml
+# Multi-Agent Proximal Policy Optimization (MAPPO) Configuration
+# For UAV Network Slicing
+
+mappo:
+  # ============================================
+  # Core RL Parameters
+  # ============================================
+  gamma: 0.99                    # Discount factor for future rewards
+                                 # Higher = care more about long-term rewards
+                                 # Range: 0.95-0.99
+  
+  gae_lambda: 0.95               # Generalized Advantage Estimation lambda
+                                 # Controls bias-variance tradeoff
+                                 # Higher = lower variance, higher bias
+                                 # Range: 0.9-0.99
+  
+  # ============================================
+  # PPO Algorithm Parameters
+  # ============================================
+  clip_epsilon: 0.2              # PPO clipping range
+                                 # Limits how much policy can change per update
+                                 # Higher = more aggressive updates
+                                 # Range: 0.1-0.3
+                                 # Recommended: 0.2 for most tasks
+  
+  value_loss_coef: 0.5           # Weight for value function loss
+                                 # Balance between policy and value learning
+                                 # Range: 0.5-1.0
+  
+  entropy_coef: 0.01             # Entropy bonus coefficient
+                                 # Encourages exploration
+                                 # Higher = more exploration
+                                 # Range: 0.001-0.1
+                                 # Start high (0.05), decay if needed
+  
+  max_grad_norm: 0.5             # Gradient clipping threshold
+                                 # Prevents exploding gradients
+                                 # Range: 0.5-1.0
+  
+  # ============================================
+  # Training Parameters
+  # ============================================
+  n_steps: 2048                  # Rollout length (steps to collect before training)
+                                 # Higher = more stable but slower
+                                 # Must be divisible by batch_size
+                                 # Typical values: 1024, 2048, 4096
+  
+  batch_size: 64                 # Mini-batch size for training
+                                 # Must divide n_steps evenly
+                                 # Higher = more stable, more memory
+                                 # Typical values: 32, 64, 128, 256
+  
+  n_epochs: 10                   # Number of epochs to train on each rollout
+                                 # How many times to reuse collected data
+                                 # Higher = more sample efficient but risk overfitting
+                                 # Typical values: 5-15
+  
+  # ============================================
+  # Learning Rates
+  # ============================================
+  actor_lr: 0.0003               # Actor (policy) learning rate
+                                 # Typical range: 1e-4 to 5e-4
+                                 # Can be higher than MADDPG due to PPO clipping
+  
+  critic_lr: 0.001               # Critic (value) learning rate
+                                 # Typically 2-3x higher than actor_lr
+                                 # Typical range: 3e-4 to 3e-3
+  
+  # ============================================
+  # Network Architecture
+  # ============================================
+  hidden_dim: 256                # Hidden layer size in policy network
+                                 # Affects model capacity
+                                 # Typical values: 128, 256, 512
+  
+  activation: 'relu'             # Activation function
+                                 # Options: 'relu', 'tanh', 'elu'
+  
+  # ============================================
+  # Advanced Options
+  # ============================================
+  use_huber_loss: false          # Use Huber loss instead of MSE for value function
+                                 # More robust to outliers
+                                 # Set to true if value loss is unstable
+  
+  huber_delta: 10.0              # Delta parameter for Huber loss
+                                 # Only used if use_huber_loss = true
+  
+  normalize_advantages: true     # Normalize advantages in each mini-batch
+                                 # Recommended: true for stable training
+  
+  use_proper_time_limits: true   # Handle episode time limits correctly
+                                 # Prevents bias from artificial episode endings
+  
+  target_kl: null                # Target KL divergence for early stopping
+                                 # If KL > target_kl, stop training epoch early
+                                 # null = disabled
+                                 # Typical value if enabled: 0.01-0.02
+
+
+# ============================================
+# HYPERPARAMETER TUNING GUIDE
+# ============================================
+
+# Problem: Training is unstable (high variance in rewards)
+# Solution:
+#   - Decrease clip_epsilon: 0.2 → 0.15
+#   - Decrease actor_lr: 3e-4 → 1e-4
+#   - Increase batch_size: 64 → 128
+#   - Increase n_epochs: 10 → 15
+
+# Problem: Learning is too slow
+# Solution:
+#   - Increase clip_epsilon: 0.2 → 0.25
+#   - Increase actor_lr: 3e-4 → 5e-4
+#   - Decrease batch_size: 64 → 32
+#   - Increase n_steps: 2048 → 4096
+
+# Problem: Policy becomes too deterministic (low exploration)
+# Solution:
+#   - Increase entropy_coef: 0.01 → 0.05
+#   - Decrease gae_lambda: 0.95 → 0.9
+#   - Check if policy std is collapsing
+
+# Problem: Value function not learning well
+# Solution:
+#   - Increase critic_lr: 1e-3 → 3e-3
+#   - Increase value_loss_coef: 0.5 → 1.0
+#   - Enable use_huber_loss: true
+#   - Check reward scaling
+
+# Problem: High KL divergence (policy changing too fast)
+# Solution:
+#   - Decrease actor_lr: 3e-4 → 1e-4
+#   - Decrease clip_epsilon: 0.2 → 0.15
+#   - Enable target_kl: 0.01
+#   - Decrease n_epochs: 10 → 5
+
+# Problem: Sample inefficient (need too many steps)
+# Solution:
+#   - Increase n_steps: 2048 → 4096
+#   - Increase n_epochs: 10 → 15
+#   - Increase batch_size: 64 → 128
+#   - This will slow down wall-clock time but improve sample efficiency
+
+
+# ============================================
+# SCENARIO-SPECIFIC RECOMMENDATIONS
+# ============================================
+
+# For UAV Network Slicing (current task):
+# mappo:
+#   clip_epsilon: 0.15           # Conservative for stable position control
+#   entropy_coef: 0.05           # Higher for diverse bandwidth allocation
+#   n_steps: 2048                # Balanced rollout length
+#   batch_size: 64               # Moderate batch for GPU efficiency
+#   n_epochs: 10                 # Standard number of epochs
+#   actor_lr: 0.0003             # Standard learning rate
+#   critic_lr: 0.001             # 3x actor learning rate
+#   gae_lambda: 0.95             # Standard GAE parameter
+
+# For Fast Prototyping (quick experiments):
+# mappo:
+#   n_steps: 1024                # Shorter rollouts
+#   batch_size: 32               # Smaller batches
+#   n_epochs: 5                  # Fewer epochs
+#   actor_lr: 0.0005             # Higher learning rate
+#   critic_lr: 0.002
+
+# For Production Training (best performance):
+# mappo:
+#   n_steps: 4096                # Longer rollouts
+#   batch_size: 128              # Larger batches
+#   n_epochs: 15                 # More epochs
+#   actor_lr: 0.0001             # Conservative learning rate
+#   critic_lr: 0.0005
+#   clip_epsilon: 0.15           # More conservative clipping
+
+# For Limited Compute (low memory/GPU):
+# mappo:
+#   n_steps: 512                 # Short rollouts
+#   batch_size: 32               # Small batches
+#   n_epochs: 5                  # Fewer epochs
+#   hidden_dim: 128              # Smaller networks
+
+
+# ============================================
+# MONITORING GUIDELINES
+# ============================================
+
+# Healthy Training Indicators:
+# - Clip fraction: 10-30% (if too high >50%, decrease clip_epsilon)
+# - Approx KL: < 0.02 (if higher, policy changing too fast)
+# - Entropy: Slowly decreasing but not collapsing to 0
+# - Value loss: Steadily decreasing
+# - Policy loss: May fluctuate but trending down
+# - Explained variance: > 0.7 is good
+
+# Warning Signs:
+# - Clip fraction > 50%: Policy changing too aggressively
+# - Approx KL > 0.05: Enable target_kl early stopping
+# - Entropy → 0: Policy becoming deterministic, increase entropy_coef
+# - Value loss not decreasing: Increase critic_lr or value_loss_coef
+# - Rewards not improving: Check reward scaling, increase n_steps
+
+
+# ============================================
+# COMPARISON WITH MADDPG
+# ============================================
+
+# MADDPG config had these (NOT in MAPPO):
+# - tau: 0.01                    # Soft update rate (no target networks in MAPPO)
+# - buffer_size: 1000000         # Replay buffer (MAPPO uses rollout buffer)
+# - batch_size: 256              # Much larger (MAPPO: 64)
+# - actor_lr: 0.0001             # Lower (MAPPO: 0.0003)
+# - critic_lr: 0.0003            # Lower (MAPPO: 0.001)
+
+# exploration:
+#   gaussian_init: 0.3           # MAPPO uses entropy instead
+#   gaussian_decay: 0.9995
+#   gaussian_min: 0.01
+#   gaussian_2nd: 0.15
+
+# MAPPO additions:
+# - gae_lambda: 0.95             # For advantage estimation
+# - clip_epsilon: 0.2            # PPO clipping
+# - entropy_coef: 0.01           # Natural exploration
+# - n_steps: 2048                # Rollout length
+# - n_epochs: 10                 # Training epochs

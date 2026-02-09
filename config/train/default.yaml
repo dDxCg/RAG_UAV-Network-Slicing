@@ -2,14 +2,14 @@
 # -------------------------------------------------------------
 
 # Step-based training configuration
-total_training_steps: 1000000    # Total training steps instead of episodes
+total_training_steps: 4000000    # Total training steps instead of episodes
 greedy_experience_gathering_steps: 1000  # Use greedy policy for experience gathering
 
 # BC Regularization
 bc_regularization:
   initial_weight: 1      # Start: 50% BC, 50% RL
   final_weight: 0       # End: 20% BC, 80% RL
-  transition_steps: 0 # 
+  transition_steps: 30000 # 
   schedule_type: 'cosine'  # 'linear', 'cosine', or 'exponential'
 
 
@@ -27,10 +27,7 @@ min_buffer_size: 1000  # Minimum experiences before training starts
 
 
 # Directories
-save_dir: "saved_models"
-log_dir: "logs"
-tensorboard_dir: "runs"
-
+save_dir: "saved_models_maddpg"
 
 # Hardware and performance
 hardware:

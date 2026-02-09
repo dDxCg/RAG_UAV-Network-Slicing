@@ -1,14 +1,17 @@
 
 import numpy as np
 from typing import List, Dict, Tuple, Optional
-from utils import Configuration, QueueingModel, Packet
+from utils import Configuration
 from dataclasses import dataclass, field
 from numba import jit, prange
-import heapq
 from collections import defaultdict
 
 global_env_config = Configuration("config/environment/default.yaml")
 global_beam_angle = global_env_config.uav_params['beam_angle']
+a = global_env_config.a2g['a']
+b = global_env_config.a2g['b']
+eta_los = global_env_config.a2g['eta_los']
+eta_nlos = global_env_config.a2g['eta_nlos']
 
 class HandoverTracker:
     '''Track handovers and calculate penalties'''
@@ -167,7 +170,7 @@ class DemandArea:
             self.RB_ids_list = []
 
 @jit(nopython=True, parallel=True, fastmath=True, cache=True)  # Add cache=True!
-def calculate_sinr_batch_numba(ue_positions, rb_frequencies, uav_positions, 
+def calculate_sinr_batch_numba(ue_positions, uav_positions, 
                                 uav_powers, serving_indices, noise_power, 
                                 path_loss_exponent):
     """Ultra-fast SINR calculation - NOW WITH CACHING"""
@@ -179,10 +182,9 @@ def calculate_sinr_batch_numba(ue_positions, rb_frequencies, uav_positions,
     # Parallel loop
     for i in prange(n_calculations):
         ue_pos = ue_positions[i]
-        rb_freq = rb_frequencies[i]
         serving_idx = serving_indices[i]
         
-        wavelength = 3e8 / rb_freq
+        wavelength = 3e8 / 3.5e9
         factor = wavelength / (4.0 * 3.141592653589793)  # Hardcode pi
         
         signal_power = 0.0
@@ -215,6 +217,129 @@ def calculate_sinr_batch_numba(ue_positions, rb_frequencies, uav_positions,
     
     return sinr_db
 
+@jit(nopython=True, parallel=True, fastmath=True, cache=True)
+def calculate_sinr_batch_numba_a2g(ue_positions, uav_positions, 
+                                    uav_powers, serving_indices, noise_power,
+                                    carrier_frequency):
+    """
+    Ultra-fast SINR calculation with Al-Hourani A2G path loss model
+    
+    Args:
+        ue_positions: (N, 3) array of UE positions [x, y, z]
+        rb_frequencies: (N,) array of RB frequencies (not used, kept for compatibility)
+        uav_positions: (M, 3) array of UAV positions [x, y, h]
+        uav_powers: (M,) array of UAV transmit powers
+        serving_indices: (N,) array of serving UAV indices
+        noise_power: Noise power in Watts
+        carrier_frequency: Carrier frequency in Hz
+    
+    Returns:
+        sinr_db: (N,) array of SINR values in dB
+    """
+    n_calculations = ue_positions.shape[0]
+    n_uavs = uav_positions.shape[0]
+    sinr_db = np.empty(n_calculations, dtype=np.float32)
+    
+    # Pre-compute frequency in MHz for FSPL calculation
+    frequency_mhz = carrier_frequency / 1e6
+    
+    # Constants
+    PI = 3.141592653589793
+    LOG10_FACTOR = 0.4342944819032518  # 1/ln(10) for log conversion
+    
+    # Parallel loop over all UEs
+    for i in prange(n_calculations):
+        ue_pos = ue_positions[i]
+        serving_idx = serving_indices[i]
+        
+        signal_power = 0.0
+        interference_power = 0.0
+        
+        # Loop over all UAVs
+        for j in range(n_uavs):
+            # Calculate 3D distance
+            dx = ue_pos[0] - uav_positions[j, 0]
+            dy = ue_pos[1] - uav_positions[j, 1]
+            dz = ue_pos[2] - uav_positions[j, 2]
+            
+            distance_3d = (dx*dx + dy*dy + dz*dz) ** 0.5
+            
+            # Avoid division by zero
+            if distance_3d < 1.0:
+                distance_3d = 1.0
+            
+            # Calculate horizontal distance (2D)
+            distance_2d = (dx*dx + dy*dy) ** 0.5
+            
+            # Calculate elevation angle in degrees
+            if distance_2d > 1e-6:
+                elevation_deg = np.arctan(uav_positions[j, 2] / distance_2d) * (180.0 / PI)
+            else:
+                # UE directly below UAV
+                elevation_deg = 90.0
+            
+            # ==========================================
+            # A2G PATH LOSS MODEL
+            # ==========================================
+            
+            # 1. LoS probability: P_LoS(θ) = 1/(1 + a·exp(-b(θ - a)))
+            exponent = -b * (elevation_deg - a)
+            # Clip exponent to avoid overflow
+            if exponent > 20.0:
+                exponent = 20.0
+            elif exponent < -20.0:
+                exponent = -20.0
+            
+            exp_term = np.exp(exponent)
+            p_los = 1.0 / (1.0 + a * exp_term)
+            
+            # 2. Expected excessive path loss (weighted average)
+            eta = eta_los * p_los + eta_nlos * (1.0 - p_los)
+            
+            # 3. Free-space path loss (FSPL) in dB
+            # FSPL = 20·log10(d) + 20·log10(f_MHz) - 27.55
+            fspl_db = 20.0 * LOG10_FACTOR * np.log(distance_3d) + \
+                      20.0 * LOG10_FACTOR * np.log(frequency_mhz) - 27.55
+            
+            # 4. Total path loss in dB
+            path_loss_db = fspl_db + eta
+            
+            # 5. Convert path loss to linear scale
+            # PL_linear = 10^(-PL_dB/10)
+            path_loss_linear = 10.0 ** (-path_loss_db / 10.0)
+            
+            # 6. Received power
+            rx_power = path_loss_linear * uav_powers[j]
+            
+            # ==========================================
+            # SIGNAL vs INTERFERENCE
+            # ==========================================
+            
+            if j == serving_idx:
+                # This is the serving UAV
+                signal_power = rx_power
+            else:
+                # Check if this interfering UAV's beam covers the UE
+                angle_to_ue = np.arccos(-dz / distance_3d) * (180.0 / PI)
+                if angle_to_ue <= global_beam_angle:
+                    interference_power += rx_power
+        
+        # ==========================================
+        # SINR CALCULATION
+        # ==========================================
+        
+        sinr = signal_power / (interference_power + noise_power)
+        
+        # Convert to dB: 10·log10(sinr)
+        sinr_db[i] = 10.0 * LOG10_FACTOR * np.log(sinr + 1e-10)
+        
+        # Clip to realistic range
+        if sinr_db[i] < -10.0:
+            sinr_db[i] = -10.0
+        elif sinr_db[i] > 50.0:
+            sinr_db[i] = 50.0
+    
+    return sinr_db
 
 class NetworkSlicingEnv:
     """
@@ -259,7 +384,7 @@ class NetworkSlicingEnv:
 
         # Channel parameters
         self.noise_power = env_config.channel.noise_power  # Watts
-        self.path_loss_exponent = env_config.channel.path_loss_exponent
+
         self.carrier_frequency = env_config.channel.carrier_frequency  # Hz
 
         # Resource block parameters
@@ -360,7 +485,7 @@ class NetworkSlicingEnv:
                 current_power=self.uav_params.initial_power,
                 battery_capacity=self.uav_params.battery_capacity,  # Joules
                 # current_battery=self.uav_params.initial_battery,  # Start fully charged
-                current_battery=0.0,  # Start with zero power
+                current_battery=self.uav_params.battery_capacity,  # Start with zero power
                 velocity_max=self.uav_params.velocity_max,  # m/s
                 buffer_size=self.uav_buffer_size,  # bits
                 energy_used={"movement": 0.0, "transmission": 0.0},
@@ -440,7 +565,8 @@ class NetworkSlicingEnv:
             norm_h = (uav.position[2] - self.uav_fly_range_h[0]) / (self.uav_fly_range_h[1] - self.uav_fly_range_h[0])
             obs.extend([norm_x, norm_y, norm_h])  # 3
             obs.append(uav.current_power / uav.max_power)  # 1
-            obs.append(uav.current_battery / uav.battery_capacity)  # 1
+            # obs.append(uav.current_battery / uav.battery_capacity)  # 1
+            obs.append(0.0)
 
             # ============================================================
             # 2. Demand Area Info (9 DAs × 7 features = 63 dims). So far 5 + 63 = 68
@@ -566,7 +692,8 @@ class NetworkSlicingEnv:
             uav.position = new_pos
             
             # Power update
-            uav.current_power = action[3] * uav.max_power
+            # print("Action power component:", action[3])
+            uav.current_power = np.clip(action[3], 0.05, 1) * uav.max_power
             
             # Energy consumption
             transmission_energy = uav.current_power * self.T_L
@@ -1289,24 +1416,21 @@ class NetworkSlicingEnv:
         
         # Collect all UE-RB pairs
         calculation_list = []
-        ue_ids, serving_uav_ids, rb_ids = [], [], []
+        ue_ids, serving_uav_ids = [], []
         
         for ue in self.ues.values():
             if not ue.is_active or ue.assigned_uav is None or not ue.assigned_rb:
                 continue
-            for rb in ue.assigned_rb:
-                calculation_list.append((ue, rb))
-                ue_ids.append(ue.id)
-                serving_uav_ids.append(ue.assigned_uav)
-                rb_ids.append(rb.id)
+            calculation_list.append(ue)
+            ue_ids.append(ue.id)
+            serving_uav_ids.append(ue.assigned_uav)
         
         if not calculation_list:
             self.sinr_cache_valid = True
             return
         
         # Prepare arrays for Numba
-        ue_positions = np.array([ue.position for ue, _ in calculation_list], dtype=np.float32)
-        rb_frequencies = np.array([rb.frequency for _, rb in calculation_list], dtype=np.float32)
+        ue_positions = np.array([ue.position for ue in calculation_list], dtype=np.float32)
         uav_positions = np.array([uav.position for uav in self.uavs.values()], dtype=np.float32)
         uav_powers = np.array([uav.current_power for uav in self.uavs.values()], dtype=np.float32)
         
@@ -1314,16 +1438,19 @@ class NetworkSlicingEnv:
         uav_ids_list = list(self.uavs.keys())
         uav_index_map = {uid: idx for idx, uid in enumerate(uav_ids_list)}
         serving_indices = np.array([uav_index_map[uid] for uid in serving_uav_ids], dtype=np.int32)
+
         
         # Call Numba-accelerated function
-        sinr_db = calculate_sinr_batch_numba(
-            ue_positions, rb_frequencies, uav_positions, uav_powers,
-            serving_indices, self.noise_power, self.path_loss_exponent
-        )
+        # sinr_db = calculate_sinr_batch_numba(
+        #     ue_positions, uav_positions, uav_powers,
+        #     serving_indices, self.noise_power, self.path_loss_exponent
+        # )
+        sinr_db = calculate_sinr_batch_numba_a2g(ue_positions, uav_positions, uav_powers,
+            serving_indices, self.noise_power, self.carrier_frequency)
         
         # Fill cache
-        for i, (ue_id, uav_id, rb_id) in enumerate(zip(ue_ids, serving_uav_ids, rb_ids)):
-            self.sinr_cache[(ue_id, uav_id, rb_id)] = sinr_db[i]
+        for i, (ue_id, uav_id) in enumerate(zip(ue_ids, serving_uav_ids)):
+            self.sinr_cache[(ue_id, uav_id)] = sinr_db[i]
         
         self.sinr_cache_valid = True
     
@@ -1430,10 +1557,10 @@ class NetworkSlicingEnv:
                 continue
             # Calculate total throughput across all RBs
             ue_throughput = 0.0
-            for rb in ue.assigned_rb:
-                sinr_db = self.sinr_cache.get((ue.id, ue.assigned_uav, rb.id), -10.0)
-                sinr_linear = 10.0 ** (sinr_db * 0.1)
-                ue_throughput += rb.bandwidth * np.log2(1.0 + sinr_linear)
+
+            sinr_db = self._get_cached_sinr(ue, self.uavs[ue.assigned_uav])
+            sinr_linear = 10.0 ** (sinr_db * 0.1)
+            ue_throughput += self.rb_bandwidth * np.log2(1.0 + sinr_linear) * len(ue.assigned_rb)  # in bps
             
             self.throughput_cache[ue.id] = ue_throughput
 
@@ -1465,13 +1592,13 @@ class NetworkSlicingEnv:
         """Invalidate throughput cache when allocations change"""
         self.throughput_cache_valid = False 
 
-    def _get_cached_sinr(self, ue: UE, uav: UAV, rb: ResourceBlock) -> float:
+    def _get_cached_sinr(self, ue: UE, uav: UAV) -> float:
         """Get SINR from cache, updating if necessary"""
         if not self.sinr_cache_valid:
             self.cache_misses += 1
             self._update_sinr_cache()
         
-        cache_key = (ue.id, uav.id, rb.id)
+        cache_key = (ue.id, uav.id)
         if cache_key in self.sinr_cache:
             self.cache_hits += 1
             return self.sinr_cache[cache_key]
@@ -1513,16 +1640,10 @@ class NetworkSlicingEnv:
             return self.throughput_cache[ue.id]
 
     def _calculate_packet_error_rate(self, ue: UE) -> float:
-        """Calculate PER based on SINR (existing - keep as is or use this)"""
+        """Calculate PER based on SINR"""
 
         uav = self.uavs[ue.assigned_uav]
-
-        sinr_values = []
-        for rb in ue.assigned_rb:
-            sinr_db = self._get_cached_sinr(ue, uav, rb)
-            sinr_values.append(sinr_db)
-
-        avg_sinr_db = np.mean(sinr_values)
+        avg_sinr_db = self._get_cached_sinr(ue, uav)
         packet_size_bytes = self.traffic_patterns[ue.slice_type]['packet_size']
 
 
@@ -2007,7 +2128,6 @@ class NetworkSlicingEnv:
         print(f"  QoS Profiles: {self.qos_profiles}")
         print(f"  Slice Weights: {self.slice_weights}")
         print(f"  Noise Power: {self.noise_power} Watts")
-        print(f"  Path Loss Exponent: {self.path_loss_exponent}")
         print(f"  Carrier Frequency: {self.carrier_frequency} Hz")
         print(f"  RB Bandwidth: {self.rb_bandwidth} Hz")
         print(f"  Total Bandwidth per UAV: {self.total_bandwidth} Hz")

@@ -1,7 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from environment import NetworkSlicingEnv
-from agents import MADRLAgent
+from agents import MADDPGAgent
+from agents_mappo import MAPPOAgent
 from utils import Configuration
 import os
 from typing import Dict, List, Tuple
@@ -11,24 +12,6 @@ from datetime import datetime
 from tqdm import tqdm
 import glob
 import pandas as pd
-
-
-class BaselineAgent(ABC):
-    """Abstract base class for baseline agents"""
-    
-    def __init__(self, num_agents: int, obs_dim: int, action_dim: int):
-        self.num_agents = num_agents
-        self.obs_dim = obs_dim
-        self.action_dim = action_dim
-    
-    @abstractmethod
-    def select_actions(self, observations: Dict[int, np.ndarray], explore: bool = False) -> Dict[int, np.ndarray]:
-        """Select actions for all agents"""
-        pass
-    
-    def get_name(self) -> str:
-        """Return agent name for logging"""
-        return self.__class__.__name__
 
 
 class BaselineAgent(ABC):
@@ -70,579 +53,6 @@ class RandomAgent(BaselineAgent):
             
             actions[agent_id] = action
         return actions
-
-class GreedyAgent(BaselineAgent):
-    """Greedy baseline that makes locally optimal decisions"""
-    
-    def __init__(self, num_agents: int, obs_dim: int, action_dim: int, env: NetworkSlicingEnv):
-        super().__init__(num_agents, obs_dim, action_dim)
-        self.env = env
-        self.power_strategy = "proportional"  # "max", "proportional", or "adaptive"
-    
-    def select_actions(self, observations: Dict[int, np.ndarray], explore: bool = False) -> Dict[int, np.ndarray]:
-        """Select greedy actions based on heuristics"""
-        actions = {}
-        
-        for uav_id, obs in observations.items():
-            action = np.zeros(self.action_dim)
-            uav = self.env.uavs[uav_id]
-            
-            # 1. Position: Move towards center of mass of assigned UEs
-            assigned_ues = [ue for ue in self.env.ues.values() 
-                          if ue.assigned_uav == uav_id and ue.is_active]
-            
-            if assigned_ues:
-                # Calculate center of mass
-                ue_positions = np.array([ue.position for ue in assigned_ues])
-                center_of_mass = np.mean(ue_positions, axis=0)
-                
-                # Direction to center of mass
-                direction = center_of_mass - uav.position
-                distance = np.linalg.norm(direction)
-                
-                if distance > 10:  # Only move if significantly far
-                    direction = direction / (distance + 1e-6)  # Normalize
-                    # Scale to action space [-1, 1]
-                    action[0] = np.clip(direction[0] * 0.5, -1, 1)
-                    action[1] = np.clip(direction[1] * 0.5, -1, 1)
-                    action[2] = np.clip(direction[2] * 0.3, -1, 1)  # Less aggressive on height
-            
-            # 2. Power: Use proportional to number of UEs or max
-            if self.power_strategy == "max":
-                action[3] = 1.0  # Maximum power
-            elif self.power_strategy == "proportional":
-                # Proportional to number of assigned UEs
-                ue_ratio = len(assigned_ues) / max(1, len(self.env.ues))
-                action[3] = np.clip(ue_ratio * 2, 0.3, 1.0)  # At least 30% power
-            else:  # adaptive
-                # Based on average distance to UEs
-                if assigned_ues:
-                    avg_distance = np.mean([np.linalg.norm(ue.position - uav.position) 
-                                          for ue in assigned_ues])
-                    # More power for farther UEs
-                    action[3] = np.clip(avg_distance / 500, 0.3, 1.0)
-                else:
-                    action[3] = 0.3
-            
-            # 3. Bandwidth allocation: Proportional to number of UEs in each DA
-            uav_das = [da for da in self.env.demand_areas.values() if da.uav_id == uav_id]
-            
-            if uav_das:
-                total_ues = sum(len(da.user_ids) for da in uav_das)
-                
-                for i, da in enumerate(uav_das):
-                    if i + 4 < self.action_dim:
-                        # Allocate bandwidth proportionally to number of users
-                        if total_ues > 0:
-                            ue_ratio = len(da.user_ids) / total_ues
-                            
-                            # Boost allocation for high-priority slices
-                            if da.slice_type == "urllc":
-                                ue_ratio *= 1.5
-                            elif da.slice_type == "embb":
-                                ue_ratio *= 1.2
-                            
-                            # Boost allocation for far UEs (high SINR level needs more resources)
-                            if da.distance_level == "Far":
-                                ue_ratio *= 1.3
-                            
-                            action[4 + i] = np.clip(ue_ratio, 0, 1)
-                        else:
-                            action[4 + i] = 0.1  # Small baseline allocation
-            
-            actions[uav_id] = action
-        
-        return actions
-
-# ============================================================================
-# ENHANCED GREEDY VARIANTS
-# ============================================================================
-
-class MaxMinFairnessGreedyAgent(BaselineAgent):
-    """
-    Max-Min Fairness Greedy: Prioritize worst-served users
-    - Position: Target users with lowest resource allocation
-    - Power: Moderate usage for stability
-    - Bandwidth: Inverse proportion - fewer resources → higher priority
-    """
-    
-    def __init__(self, num_agents: int, obs_dim: int, action_dim: int, env):
-        super().__init__(num_agents, obs_dim, action_dim)
-        self.env = env
-    
-    def select_actions(self, observations: Dict[int, np.ndarray], explore: bool = False) -> Dict[int, np.ndarray]:
-        actions = {}
-        
-        for uav_id, obs in observations.items():
-            action = np.zeros(self.action_dim)
-            uav = self.env.uavs[uav_id]
-            
-            # 1. Position: Move towards worst-served users
-            assigned_ues = [ue for ue in self.env.ues.values() 
-                           if ue.assigned_uav == uav_id and ue.is_active]
-            
-            if assigned_ues:
-                # Rank users by resource allocation
-                ue_scores = [(ue, len(ue.assigned_rb) if ue.assigned_rb else 0) 
-                            for ue in assigned_ues]
-                ue_scores.sort(key=lambda x: x[1])
-                
-                # Target worst 30% of users
-                worst_count = max(1, len(ue_scores) // 3)
-                worst_ues = [ue for ue, _ in ue_scores[:worst_count]]
-                
-                target_pos = np.mean([ue.position for ue in worst_ues], axis=0)
-                direction = target_pos - uav.position
-                distance = np.linalg.norm(direction)
-                
-                if distance > 5.0:
-                    direction = (direction / distance) * 0.35
-                    action[0:3] = np.clip(direction, -1.0, 1.0)
-            
-            # 2. Power: Moderate and stable
-            num_users = len(assigned_ues)
-            if num_users > 0:
-                action[3] = 0.7
-            else:
-                action[3] = 0.4
-            
-            # 3. Bandwidth: Max-min fairness allocation
-            uav_das = [da for da in self.env.demand_areas.values() if da.uav_id == uav_id]
-            
-            if uav_das:
-                allocations = []
-                for da in sorted(uav_das, key=lambda d: d.id):
-                    if len(da.user_ids) == 0:
-                        allocations.append(0.02)
-                    else:
-                        # Inverse proportion: fewer existing RBs → higher priority
-                        avg_rbs = len(da.RB_ids_list) / max(1, len(da.user_ids))
-                        urgency = 1.0 / (avg_rbs + 0.5)
-                        slice_weight = self.env.slice_weights[da.slice_type]
-                        allocations.append(urgency * slice_weight)
-                
-                allocations = np.array(allocations)
-                action[4:] = allocations / (allocations.sum() + 1e-6)
-            
-            actions[uav_id] = action
-        
-        return actions
-
-class ProportionalFairGreedyAgent(BaselineAgent):
-    """
-    Proportional Fair Greedy: Balance efficiency and fairness
-    - Position: Towards geometric center with efficiency focus
-    - Power: High but battery-aware
-    - Bandwidth: Proportional fairness metric maximization
-    """
-    
-    def __init__(self, num_agents: int, obs_dim: int, action_dim: int, env):
-        super().__init__(num_agents, obs_dim, action_dim)
-        self.env = env
-    
-    def select_actions(self, observations: Dict[int, np.ndarray], explore: bool = False) -> Dict[int, np.ndarray]:
-        actions = {}
-        
-        for uav_id, obs in observations.items():
-            action = np.zeros(self.action_dim)
-            uav = self.env.uavs[uav_id]
-            
-            # 1. Position: Geometric center
-            assigned_ues = [ue for ue in self.env.ues.values() 
-                           if ue.assigned_uav == uav_id and ue.is_active]
-            
-            if assigned_ues:
-                center = np.mean([ue.position for ue in assigned_ues], axis=0)
-                direction = center - uav.position
-                distance = np.linalg.norm(direction)
-                
-                if distance > 10.0:
-                    direction = (direction / distance) * 0.45
-                    action[0:3] = np.clip(direction, -1.0, 1.0)
-            
-            # 2. Power: High utilization with battery awareness
-            battery_ratio = uav.current_battery / uav.battery_capacity
-            if len(assigned_ues) > 0:
-                base_power = 0.85
-                battery_penalty = 1.0 if battery_ratio > 0.5 else 0.7
-                action[3] = base_power * battery_penalty
-            else:
-                action[3] = 0.35
-            
-            # 3. Bandwidth: Proportional fairness
-            uav_das = [da for da in self.env.demand_areas.values() if da.uav_id == uav_id]
-            
-            if uav_das:
-                allocations = []
-                for da in sorted(uav_das, key=lambda d: d.id):
-                    if len(da.user_ids) == 0:
-                        allocations.append(0.01)
-                    else:
-                        # Proportional fair: log utility approximation
-                        current_rbs = len(da.RB_ids_list)
-                        num_users = len(da.user_ids)
-                        
-                        # Marginal utility (derivative of log)
-                        marginal_utility = num_users / (current_rbs + 1.0)
-                        
-                        # Weight by slice priority
-                        slice_weight = self.env.slice_weights[da.slice_type]
-                        
-                        allocations.append(marginal_utility * slice_weight)
-                
-                allocations = np.array(allocations)
-                action[4:] = allocations / (allocations.sum() + 1e-6)
-            
-            actions[uav_id] = action
-        
-        return actions
-
-class LoadBalancingGreedyAgent(BaselineAgent):
-    """
-    Load Balancing Greedy: Distribute load evenly across UAVs
-    - Position: Avoid clustering with other UAVs
-    - Power: Balanced based on relative load
-    - Bandwidth: Equal per-user allocation within each DA
-    """
-    
-    def __init__(self, num_agents: int, obs_dim: int, action_dim: int, env):
-        super().__init__(num_agents, obs_dim, action_dim)
-        self.env = env
-        self.repulsion_factor = 0.2
-    
-    def select_actions(self, observations: Dict[int, np.ndarray], explore: bool = False) -> Dict[int, np.ndarray]:
-        actions = {}
-        
-        for uav_id, obs in observations.items():
-            action = np.zeros(self.action_dim)
-            uav = self.env.uavs[uav_id]
-            
-            # 1. Position: Attraction to users + Repulsion from other UAVs
-            assigned_ues = [ue for ue in self.env.ues.values() 
-                           if ue.assigned_uav == uav_id and ue.is_active]
-            
-            attraction = np.zeros(3)
-            if assigned_ues:
-                center = np.mean([ue.position for ue in assigned_ues], axis=0)
-                attraction = center - uav.position
-                if np.linalg.norm(attraction) > 1e-6:
-                    attraction = attraction / np.linalg.norm(attraction)
-            
-            # Repulsion from other UAVs
-            repulsion = np.zeros(3)
-            for other_uav in self.env.uavs.values():
-                if other_uav.id != uav_id:
-                    direction = uav.position - other_uav.position
-                    distance = np.linalg.norm(direction)
-                    if distance < 300.0 and distance > 1e-6:
-                        repulsion += (direction / distance) * (1.0 - distance / 300.0)
-            
-            if np.linalg.norm(repulsion) > 1e-6:
-                repulsion = (repulsion / np.linalg.norm(repulsion)) * self.repulsion_factor
-            
-            combined = attraction + repulsion
-            if np.linalg.norm(combined) > 1e-6:
-                action[0:3] = np.clip(combined / np.linalg.norm(combined) * 0.4, -1.0, 1.0)
-            
-            # 2. Power: Proportional to relative load
-            my_load = len(assigned_ues)
-            total_load = sum(len([ue for ue in self.env.ues.values() 
-                                 if ue.assigned_uav == other_uav.id and ue.is_active])
-                           for other_uav in self.env.uavs.values())
-            
-            if total_load > 0:
-                load_ratio = my_load / total_load * self.num_agents
-                action[3] = np.clip(0.5 + load_ratio * 0.3, 0.4, 0.9)
-            else:
-                action[3] = 0.4
-            
-            # 3. Bandwidth: Equal per-user allocation
-            uav_das = [da for da in self.env.demand_areas.values() if da.uav_id == uav_id]
-            
-            if uav_das:
-                # Total users across all DAs
-                total_users = sum(len(da.user_ids) for da in uav_das)
-                
-                allocations = []
-                for da in sorted(uav_das, key=lambda d: d.id):
-                    if total_users > 0:
-                        allocations.append(len(da.user_ids) / total_users)
-                    else:
-                        allocations.append(1.0 / len(uav_das))
-                
-                action[4:] = np.array(allocations)
-            
-            actions[uav_id] = action
-        
-        return actions
-
-class EnergyAwareGreedyAgent(BaselineAgent):
-    """
-    Energy-Aware Greedy: Optimize for energy efficiency
-    - Position: Minimize movement distance
-    - Power: Conservative, scaled by necessity
-    - Bandwidth: Efficient allocation to reduce interference
-    """
-    
-    def __init__(self, num_agents: int, obs_dim: int, action_dim: int, env):
-        super().__init__(num_agents, obs_dim, action_dim)
-        self.env = env
-    
-    def select_actions(self, observations: Dict[int, np.ndarray], explore: bool = False) -> Dict[int, np.ndarray]:
-        actions = {}
-        
-        for uav_id, obs in observations.items():
-            action = np.zeros(self.action_dim)
-            uav = self.env.uavs[uav_id]
-            
-            # 1. Position: Minimal movement
-            assigned_ues = [ue for ue in self.env.ues.values() 
-                           if ue.assigned_uav == uav_id and ue.is_active]
-            
-            if assigned_ues:
-                center = np.mean([ue.position for ue in assigned_ues], axis=0)
-                direction = center - uav.position
-                distance = np.linalg.norm(direction)
-                
-                # Only move if really necessary
-                if distance > 50.0:
-                    direction = (direction / distance) * 0.25
-                    action[0:3] = np.clip(direction, -1.0, 1.0)
-            
-            # 2. Power: Conservative with minimum viable power
-            battery_ratio = uav.current_battery / uav.battery_capacity
-            num_users = len(assigned_ues)
-            
-            if num_users > 0:
-                # Calculate minimum power needed
-                avg_distance = np.mean([np.linalg.norm(ue.position - uav.position) 
-                                       for ue in assigned_ues])
-                
-                # Power scales with distance and battery state
-                base_power = np.clip(avg_distance / 500.0, 0.3, 0.7)
-                battery_scaling = 0.8 if battery_ratio < 0.4 else 1.0
-                
-                action[3] = base_power * battery_scaling
-            else:
-                action[3] = 0.3
-            
-            # 3. Bandwidth: Focus on nearby users (lower power needs)
-            uav_das = [da for da in self.env.demand_areas.values() if da.uav_id == uav_id]
-            
-            if uav_das:
-                allocations = []
-                for da in sorted(uav_das, key=lambda d: d.id):
-                    if len(da.user_ids) == 0:
-                        allocations.append(0.01)
-                    else:
-                        # Prioritize nearby users (lower transmission energy)
-                        distance_bonus = {'Near': 0.6, 'Medium': 1.0, 'Far': 1.5}[da.distance_level]
-                        slice_weight = self.env.slice_weights[da.slice_type]
-                        num_users = len(da.user_ids)
-                        
-                        allocations.append(num_users * slice_weight * distance_bonus)
-                
-                allocations = np.array(allocations)
-                action[4:] = allocations / (allocations.sum() + 1e-6)
-            
-            actions[uav_id] = action
-        
-        return actions
-
-class AdaptiveHeightGreedyAgent(BaselineAgent):
-    """
-    Adaptive Height Strategy:
-    - Spread out users → Fly higher (wider coverage, beam angle covers more area)
-    - Clustered users → Fly lower (better signal quality, higher SINR)
-    - Adjusts height dynamically based on user spatial distribution
-    """
-    
-    def __init__(self, num_agents: int, obs_dim: int, action_dim: int, env):
-        super().__init__(num_agents, obs_dim, action_dim)
-        self.env = env
-        self.min_height = env.uav_fly_range_h[0]
-        self.max_height = env.uav_fly_range_h[1]
-        self.position_aggressiveness = 0.4
-    
-    def select_actions(self, observations: Dict[int, np.ndarray], explore: bool = False) -> Dict[int, np.ndarray]:
-        actions = {}
-        
-        for uav_id, obs in observations.items():
-            action = np.zeros(self.action_dim)
-            uav = self.env.uavs[uav_id]
-            
-            # Get assigned UEs
-            assigned_ues = [ue for ue in self.env.ues.values() 
-                           if ue.assigned_uav == uav_id and ue.is_active]
-            
-            if not assigned_ues:
-                action[3] = 0.4  # Minimal power
-                action[4:] = 1.0 / (self.action_dim - 4)  # Equal bandwidth
-                actions[uav_id] = action
-                continue
-            
-            # 1. Calculate optimal height based on user spread
-            target_height = self._compute_optimal_height(uav, assigned_ues)
-            
-            # 2. Position: Move towards weighted centroid (XY) + target height (Z)
-            position_action = self._compute_smart_position(uav, assigned_ues, target_height)
-            action[0:3] = position_action
-            
-            # 3. Power: Adjust based on height (higher altitude needs more power)
-            power_action = self._compute_height_aware_power(uav, assigned_ues, target_height)
-            action[3] = power_action
-            
-            # 4. Bandwidth: Standard allocation
-            bandwidth_actions = self._compute_intelligent_bandwidth(uav)
-            action[4:] = bandwidth_actions
-            
-            actions[uav_id] = action
-        
-        return actions
-    
-    def _compute_optimal_height(self, uav, assigned_ues) -> float:
-        """
-        Calculate optimal height based on user spatial distribution.
-        
-        Strategy:
-        - High user spread → Fly higher (beam covers more area)
-        - Low user spread → Fly lower (better SINR for clustered users)
-        - Consider beam angle constraint
-        """
-        if not assigned_ues:
-            return (self.min_height + self.max_height) / 2
-        
-        # Calculate user spread (standard deviation of distances from centroid)
-        ue_positions = np.array([ue.position[:2] for ue in assigned_ues])
-        centroid_2d = np.mean(ue_positions, axis=0)
-        
-        distances = [np.linalg.norm(ue.position[:2] - centroid_2d) for ue in assigned_ues]
-        user_spread = np.std(distances) if len(distances) > 1 else 0
-        
-        # Calculate max distance to farthest user
-        max_distance = max(distances) if distances else 0
-        
-        # Calculate required height for beam coverage
-        # Given beam angle θ and distance d, minimum height h = d / tan(θ)
-        beam_angle_rad = np.radians(uav.beam_angle)
-        min_height_for_coverage = max_distance / np.tan(beam_angle_rad) if beam_angle_rad > 0 else self.min_height
-        
-        # Strategy: Balance between coverage and quality
-        if user_spread > 100:  # Highly spread out
-            # Prioritize coverage - fly higher
-            target_height = max(min_height_for_coverage * 1.2, self.max_height * 0.7)
-        elif user_spread > 50:  # Moderately spread
-            # Balanced approach
-            target_height = max(min_height_for_coverage * 1.1, self.max_height * 0.5)
-        else:  # Clustered users
-            # Prioritize signal quality - fly lower
-            target_height = max(min_height_for_coverage * 0.9, self.min_height * 1.5)
-        
-        # Clamp to allowed range
-        target_height = np.clip(target_height, self.min_height, self.max_height)
-        
-        return target_height
-    
-    def _compute_smart_position(self, uav, assigned_ues, target_height) -> np.ndarray:
-        """Position with height awareness"""
-        if not assigned_ues:
-            return np.zeros(3)
-        
-        # Weighted centroid in XY plane
-        weighted_positions = []
-        total_weight = 0.0
-        
-        for ue in assigned_ues:
-            slice_weight = self.env.slice_weights[ue.slice_type]
-            distance = np.linalg.norm(ue.position[:2] - uav.position[:2])
-            distance_weight = 1.0 / (distance + 20.0)
-            
-            combined_weight = slice_weight * distance_weight
-            weighted_positions.append(ue.position[:2] * combined_weight)
-            total_weight += combined_weight
-        
-        target_xy = sum(weighted_positions) / total_weight if total_weight > 0 else uav.position[:2]
-        
-        # XY direction
-        direction_xy = target_xy - uav.position[:2]
-        distance_xy = np.linalg.norm(direction_xy)
-        
-        if distance_xy > 5.0:
-            direction_xy = (direction_xy / distance_xy) * self.position_aggressiveness
-        else:
-            direction_xy = np.zeros(2)
-        
-        # Z direction (height adjustment)
-        current_height = uav.position[2]
-        height_diff = target_height - current_height
-        
-        # Smooth height adjustment (slower than XY movement)
-        height_action = np.clip(height_diff / 100.0, -0.3, 0.3)
-        
-        return np.array([
-            np.clip(direction_xy[0], -1.0, 1.0),
-            np.clip(direction_xy[1], -1.0, 1.0),
-            height_action
-        ])
-    
-    def _compute_height_aware_power(self, uav, assigned_ues, target_height) -> float:
-        """Power allocation considering altitude"""
-        if not assigned_ues:
-            return 0.4
-        
-        # Base power factors
-        num_users = len(assigned_ues)
-        demand_factor = min(num_users / 20.0, 1.0)
-        
-        # Height penalty: Higher altitude needs more power
-        # Path loss increases with distance, so compensate
-        height_factor = 1.0 + (target_height - self.min_height) / (self.max_height - self.min_height) * 0.3
-        
-        # Average distance to users
-        avg_distance_2d = np.mean([np.linalg.norm(ue.position[:2] - uav.position[:2]) 
-                                   for ue in assigned_ues])
-        # 3D distance will be sqrt(distance_2d^2 + height^2)
-        avg_distance_3d = np.sqrt(avg_distance_2d**2 + target_height**2)
-        distance_factor = np.clip(avg_distance_3d / 400.0, 0.5, 1.0)
-        
-        # Slice priority
-        slice_priorities = [self.env.slice_weights[ue.slice_type] for ue in assigned_ues]
-        avg_priority = np.mean(slice_priorities)
-        
-        # Battery constraint
-        battery_ratio = uav.current_battery / uav.battery_capacity
-        battery_factor = 0.6 if battery_ratio < 0.3 else (0.8 if battery_ratio < 0.5 else 1.0)
-        
-        # Combine
-        target_power = 0.4 + 0.45 * demand_factor * height_factor * distance_factor * avg_priority * battery_factor
-        
-        return np.clip(target_power, 0.4, 0.95)
-    
-    def _compute_intelligent_bandwidth(self, uav) -> np.ndarray:
-        """Standard bandwidth allocation"""
-        uav_das = [da for da in self.env.demand_areas.values() if da.uav_id == uav.id]
-        
-        if not uav_das:
-            return np.ones(self.action_dim - 4) / (self.action_dim - 4)
-        
-        priorities = []
-        for da in sorted(uav_das, key=lambda d: d.id):
-            if len(da.user_ids) == 0:
-                priorities.append(0.01)
-            else:
-                priority = (len(da.user_ids) * 
-                           self.env.slice_weights[da.slice_type] *
-                           {'Near': 1.0, 'Medium': 1.4, 'Far': 1.8}[da.distance_level])
-                priorities.append(priority)
-        
-        allocations = np.array(priorities) / (sum(priorities) + 1e-6)
-        
-        # Minimum allocation
-        for i, da in enumerate(sorted(uav_das, key=lambda d: d.id)):
-            if len(da.user_ids) > 0:
-                allocations[i] = max(allocations[i], 0.03)
-        
-        return allocations / allocations.sum()
 
 class CoverageMaximizationGreedyAgent(BaselineAgent):
     """
@@ -754,7 +164,7 @@ class CoverageMaximizationGreedyAgent(BaselineAgent):
         height_ratio = (target_height - self.env.uav_fly_range_h[0]) / \
                       (self.env.uav_fly_range_h[1] - self.env.uav_fly_range_h[0])
 
-        base_power = np.sin(height_ratio * np.pi / 2)  # Between 0.4 and 1.0
+        base_power = np.sin(height_ratio * np.pi / 2) * 0.4  # Between 0.4 and 1.0
 
         
         return np.clip(base_power, 0, 1)
@@ -932,8 +342,64 @@ class QoSAwareHeightGreedyAgent(BaselineAgent):
         # Battery constraint
         battery_ratio = uav.current_battery / uav.battery_capacity
         battery_factor = 0.7 if battery_ratio < 0.25 else 1.0
+        battery_factor = 0.7
         
         return np.clip((base_power + power_boost) * battery_factor, 0.5, 0.95)
+
+    # def _compute_qos_power(self, uav, assigned_ues, target_height) -> float:
+    #     """Power allocation for QoS satisfaction considering all slice types"""
+    #     if not assigned_ues:
+    #         return 0.4
+        
+    #     # Count users by slice type
+    #     slice_counts = {'urllc': 0, 'embb': 0, 'mmtc': 0}
+    #     for ue in assigned_ues:
+    #         slice_type = ue.slice_type.lower()
+    #         if slice_type in slice_counts:
+    #             slice_counts[slice_type] += 1
+        
+    #     total_ues = len(assigned_ues)
+        
+    #     # Calculate slice type ratios
+    #     urllc_ratio = slice_counts['urllc'] / total_ues
+    #     embb_ratio = slice_counts['embb'] / total_ues
+    #     mmtc_ratio = slice_counts['mmtc'] / total_ues
+        
+    #     # Base power levels for each slice type (normalized 0-1)
+    #     # URLLC: Highest power for reliability and low latency
+    #     # eMBB: High power for throughput
+    #     # mMTC: Lower power (many devices, lower individual rates)
+    #     power_urllc = 0.85
+    #     power_embb = 0.70
+    #     power_mmtc = 0.50
+        
+    #     # Weighted average based on slice composition
+    #     base_power = (urllc_ratio * power_urllc + 
+    #                 embb_ratio * power_embb + 
+    #                 mmtc_ratio * power_mmtc)
+        
+    #     # Ensure minimum power level
+    #     base_power = max(base_power, 0.45)
+        
+    #     # Height adjustment: Higher altitude requires more power
+    #     height_ratio = (target_height - self.env.uav_fly_range_h[0]) / \
+    #                 (self.env.uav_fly_range_h[1] - self.env.uav_fly_range_h[0])
+    #     power_boost = 0.15 * height_ratio
+        
+    #     # Battery constraint: Reduce power when battery is low
+    #     battery_ratio = uav.current_battery / uav.battery_capacity
+    #     if battery_ratio < 0.25:
+    #         battery_factor = 0.7
+    #     elif battery_ratio < 0.50:
+    #         battery_factor = 0.85
+    #     else:
+    #         battery_factor = 1.0
+        
+    #     # Final power calculation
+    #     final_power = (base_power + power_boost) * battery_factor
+        
+    #     # Clip to valid range [0, 1]
+    #     return max(0.0, min(1.0, final_power))
     
     def _compute_qos_bandwidth(self, uav) -> np.ndarray:
         """Bandwidth with strong QoS priorities"""
@@ -964,230 +430,28 @@ class QoSAwareHeightGreedyAgent(BaselineAgent):
         
         return allocations / allocations.sum()
 
-class DynamicHeightGreedyAgent(BaselineAgent):
-    """
-    Dynamic Height Strategy:
-    - Continuously adjusts height based on real-time metrics
-    - Monitors uncovered UEs and adjusts height to improve coverage
-    - Tracks satisfaction per distance level and adjusts accordingly
-    - Most responsive to changing network conditions
-    """
+class MAPPOWrapper(BaselineAgent):
+    def __init__(self, mappo_agent: MAPPOAgent):
+        self.agent = mappo_agent
+        self.num_agents = mappo_agent.num_agents
+        self.obs_dim = mappo_agent.obs_dim
+        self.action_dim = mappo_agent.action_dim
     
-    def __init__(self, num_agents: int, obs_dim: int, action_dim: int, env):
-        super().__init__(num_agents, obs_dim, action_dim)
-        self.env = env
-        self.height_adjustment_rate = 0.3  # How aggressively to adjust height
-    
-    def select_actions(self, observations: Dict[int, np.ndarray], explore: bool = False) -> Dict[int, np.ndarray]:
-        actions = {}
-        
-        for uav_id, obs in observations.items():
-            action = np.zeros(self.action_dim)
-            uav = self.env.uavs[uav_id]
-            
-            assigned_ues = [ue for ue in self.env.ues.values() 
-                           if ue.assigned_uav == uav_id and ue.is_active]
-            
-            if not assigned_ues:
-                action[3] = 0.4
-                action[4:] = 1.0 / (self.action_dim - 4)
-                actions[uav_id] = action
-                continue
-            
-            # 1. Calculate dynamic height based on current performance
-            target_height = self._compute_dynamic_height(uav, assigned_ues)
-            
-            # 2. Responsive positioning
-            position_action = self._compute_dynamic_position(uav, assigned_ues, target_height)
-            action[0:3] = position_action
-            
-            # 3. Adaptive power
-            action[3] = self._compute_dynamic_power(uav, assigned_ues, target_height)
-            
-            # 4. Performance-based bandwidth
-            action[4:] = self._compute_dynamic_bandwidth(uav)
-            
-            actions[uav_id] = action
-        
+    def select_actions(self, observations, explore=False):
+        actions, _, _ = self.agent.select_actions(
+            observations, deterministic=True
+        )
         return actions
     
-    def _compute_dynamic_height(self, uav, assigned_ues) -> float:
-        """Adjust height based on real-time performance metrics"""
-        if not assigned_ues:
-            return uav.position[2]  # Stay at current height
-        
-        # Check coverage issues
-        uncovered_ues = []
-        for ue in assigned_ues:
-            beam_status = self.env.get_ue_beam_status(ue.id)
-            if beam_status and not beam_status['covered']:
-                uncovered_ues.append(ue)
-        
-        uncoverage_ratio = len(uncovered_ues) / len(assigned_ues)
-        
-        # Check satisfaction by distance level
-        ue_info = self.env.get_UEs_throughput_demand_and_satisfaction()
-        near_satisfaction = []
-        far_satisfaction = []
-        
-        for ue in assigned_ues:
-            if ue.id in ue_info:
-                _, _, satisfaction = ue_info[ue.id]
-                if ue.assigned_da in self.env.demand_areas:
-                    da = self.env.demand_areas[ue.assigned_da]
-                    if da.distance_level == 'Near':
-                        near_satisfaction.append(satisfaction)
-                    elif da.distance_level == 'Far':
-                        far_satisfaction.append(satisfaction)
-        
-        avg_near_sat = np.mean(near_satisfaction) if near_satisfaction else 1.0
-        avg_far_sat = np.mean(far_satisfaction) if far_satisfaction else 1.0
-        
-        # Decision logic
-        current_height = uav.position[2]
-        height_range = self.env.uav_fly_range_h[1] - self.env.uav_fly_range_h[0]
-        
-        # Case 1: High uncoverage → Increase height significantly
-        if uncoverage_ratio > 0.2:
-            target_height = current_height + height_range * 0.3
-        
-        # Case 2: Far users unsatisfied → Increase height moderately
-        elif avg_far_sat < 0.5 and avg_near_sat > 0.7:
-            target_height = current_height + height_range * 0.2
-        
-        # Case 3: Near users unsatisfied but far users ok → Decrease height
-        elif avg_near_sat < 0.6 and avg_far_sat > 0.7:
-            target_height = current_height - height_range * 0.15
-        
-        # Case 4: Everything ok → Small adjustment towards optimal
-        else:
-            # Calculate spatial optimal height
-            ue_positions = np.array([ue.position[:2] for ue in assigned_ues])
-            centroid = np.mean(ue_positions, axis=0)
-            max_distance = max([np.linalg.norm(ue.position[:2] - centroid) for ue in assigned_ues])
-            
-            beam_angle_rad = np.radians(uav.beam_angle)
-            optimal_height = (max_distance / np.tan(beam_angle_rad)) * 1.1 if beam_angle_rad > 0 else current_height
-            
-            # Gradual adjustment
-            target_height = current_height + (optimal_height - current_height) * 0.1
-        
-        # Clamp
-        target_height = np.clip(target_height, 
-                               self.env.uav_fly_range_h[0], 
-                               self.env.uav_fly_range_h[1])
-        
-        return target_height
-    
-    def _compute_dynamic_position(self, uav, assigned_ues, target_height) -> np.ndarray:
-        """Responsive position adjustment"""
-        if not assigned_ues:
-            return np.zeros(3)
-        
-        # Weight uncovered users more heavily
-        weighted_positions = []
-        total_weight = 0.0
-        
-        for ue in assigned_ues:
-            beam_status = self.env.get_ue_beam_status(ue.id)
-            
-            # Uncovered UEs get 3x weight
-            coverage_weight = 3.0 if (beam_status and not beam_status['covered']) else 1.0
-            slice_weight = self.env.slice_weights[ue.slice_type]
-            
-            combined_weight = coverage_weight * slice_weight
-            weighted_positions.append(ue.position[:2] * combined_weight)
-            total_weight += combined_weight
-        
-        target_xy = sum(weighted_positions) / total_weight if total_weight > 0 else uav.position[:2]
-        
-        # XY
-        direction_xy = target_xy - uav.position[:2]
-        distance_xy = np.linalg.norm(direction_xy)
-        
-        if distance_xy > 5.0:
-            direction_xy = (direction_xy / distance_xy) * 0.45
-        else:
-            direction_xy = np.zeros(2)
-        
-        # Z - more aggressive adjustment
-        height_diff = target_height - uav.position[2]
-        height_action = np.clip(height_diff / 60.0 * self.height_adjustment_rate, -0.5, 0.5)
-        
-        return np.array([
-            np.clip(direction_xy[0], -1.0, 1.0),
-            np.clip(direction_xy[1], -1.0, 1.0),
-            height_action
-        ])
-    
-    def _compute_dynamic_power(self, uav, assigned_ues, target_height) -> float:
-        """Adaptive power based on current conditions"""
-        if not assigned_ues:
-            return 0.4
-        
-        # Check if we have coverage issues
-        beam_statuses = [self.env.get_ue_beam_status(ue.id) for ue in assigned_ues]
-        uncovered_count = sum(1 for status in beam_statuses if status and not status['covered'])
-        
-        # Base power higher if coverage issues
-        base_power = 0.85 if uncovered_count > 0 else 0.7
-        
-        # Height compensation
-        height_ratio = (target_height - self.env.uav_fly_range_h[0]) / \
-                      (self.env.uav_fly_range_h[1] - self.env.uav_fly_range_h[0])
-        power_boost = 0.1 * height_ratio
-        
-        # Battery
-        battery_ratio = uav.current_battery / uav.battery_capacity
-        battery_factor = 0.75 if battery_ratio < 0.3 else 1.0
-        
-        return np.clip((base_power + power_boost) * battery_factor, 0.5, 0.95)
-    
-    def _compute_dynamic_bandwidth(self, uav) -> np.ndarray:
-        """Bandwidth based on real-time satisfaction"""
-        uav_das = [da for da in self.env.demand_areas.values() if da.uav_id == uav.id]
-        
-        if not uav_das:
-            return np.ones(self.action_dim - 4) / (self.action_dim - 4)
-        
-        priorities = []
-        ue_info = self.env.get_UEs_throughput_demand_and_satisfaction()
-        
-        for da in sorted(uav_das, key=lambda d: d.id):
-            if len(da.user_ids) == 0:
-                priorities.append(0.01)
-            else:
-                # Calculate average satisfaction for this DA
-                satisfactions = []
-                for ue_id in da.user_ids:
-                    if ue_id in ue_info:
-                        _, _, satisfaction = ue_info[ue_id]
-                        satisfactions.append(satisfaction)
-                
-                avg_satisfaction = np.mean(satisfactions) if satisfactions else 0.5
-                
-                # Urgency: lower satisfaction → higher priority
-                urgency = 2.0 - avg_satisfaction  # Range: [1.0, 2.0]
-                
-                priority = (len(da.user_ids) * 
-                           self.env.slice_weights[da.slice_type] *
-                           urgency *
-                           {'Near': 1.0, 'Medium': 1.3, 'Far': 1.6}[da.distance_level])
-                priorities.append(priority)
-        
-        allocations = np.array(priorities) / (sum(priorities) + 1e-6)
-        
-        for i, da in enumerate(sorted(uav_das, key=lambda d: d.id)):
-            if len(da.user_ids) > 0:
-                allocations[i] = max(allocations[i], 0.02)
-        
-        return allocations / allocations.sum()
+    def get_name(self):
+        return "MAPPO"
 
 class EvaluationFramework:
     """Framework for evaluating and comparing agents"""
     
     def __init__(self, env_config_path: str, results_dir: str = "baseline_results"):
         self.env_config_path = env_config_path
+        self.env = NetworkSlicingEnv(config_path=env_config_path)
         self.results_dir = results_dir
         os.makedirs(results_dir, exist_ok=True)
         
@@ -1217,6 +481,11 @@ class EvaluationFramework:
             'fairness': [],
             'active_ues': []
         }
+
+        for u in range(len(env.uavs.values())):
+            metrics[f'uav_{u}_pos_x'] = []
+            metrics[f'uav_{u}_pos_y'] = []
+            metrics[f'uav_{u}_pos_z'] = []
         
         cumulative_reward = 0
         
@@ -1226,6 +495,12 @@ class EvaluationFramework:
             
             # Step environment
             next_obs, reward, done, info = env.step(actions)
+
+            # Store UAV positions
+            for uav_id, uav in env.uavs.items():
+                metrics[f'uav_{uav_id}_pos_x'].append(uav.position[0])
+                metrics[f'uav_{uav_id}_pos_y'].append(uav.position[1])
+                metrics[f'uav_{uav_id}_pos_z'].append(uav.position[2])
             
             cumulative_reward += reward
             
@@ -1484,6 +759,10 @@ class EvaluationFramework:
         ax.set_ylim([0, 1.1])
         ax.legend(loc='best')
         ax.grid(True, alpha=0.3, axis='y')
+
+        # Movement Energy
+
+
         
         plt.tight_layout()
         
@@ -1516,123 +795,254 @@ class EvaluationFramework:
         for result in results_list:
             agent_name = result['agent_name'].replace(' ', '_').replace('(', '').replace(')', '')
             csv_path = os.path.join(self.run_dir, f'{agent_name}.csv')
+            title_list = ['step', 'reward', 'cumulative_reward', 'qos', 'energy', 'fairness', 'active_ues']
+            for u in range(len(self.env.uavs.values())):
+                title_list.append(f'uav_{u}_pos_x')
+                title_list.append(f'uav_{u}_pos_y')
+                title_list.append(f'uav_{u}_pos_z')
             
             import csv
             with open(csv_path, 'w', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow(['step', 'reward', 'cumulative_reward', 'qos', 'energy', 'fairness', 'active_ues'])
+                writer.writerow(title_list)
                 
                 metrics = result['metrics']
                 for i in range(len(metrics['steps'])):
-                    writer.writerow([
+                    n_uavs = len(list(self.env.uavs.values()))
+                    row = [
                         metrics['steps'][i],
                         metrics['rewards'][i],
                         metrics['cumulative_rewards'][i],
                         metrics['qos'][i],
                         metrics['energy'][i],
                         metrics['fairness'][i],
-                        metrics['active_ues'][i]
-                    ])
+                        metrics['active_ues'][i],
+                    ]
+                    for u in range(n_uavs):
+                        row.extend([
+                            metrics[f'uav_{u}_pos_x'][i],
+                            metrics[f'uav_{u}_pos_y'][i],
+                            metrics[f'uav_{u}_pos_z'][i],
+                        ])
+                    writer.writerow(row)
             
             print(f"Saved detailed metrics to {csv_path}")
 
-class AdaptiveMultiObjectiveGreedy:
-    """
-    Ultimate greedy baseline that optimizes for QoS, energy, and fairness
-    in a single decision framework with adaptive weighting
-    """
-    
-    def select_actions(self, observation):
-        # Parse observation
-        uav_state = observation[:5]  # position, power, battery
-        da_info = observation[5:68].reshape(9, 7)  # 9 DAs x 7 features
-        handover_state = observation[68:72]
-        surrounding = observation[72:80]
+    def plot_trajectory(self, run_dir: str):
+        """
+        Plot UAV trajectories from saved CSV files with color gradients showing temporal progression.
+        Each subplot is saved as a separate image file.
         
-        # Extract critical metrics per DA
-        queues = da_info[:, 0]  # Queue lengths
-        delays = da_info[:, 1]  # Delays
-        throughputs = da_info[:, 2]  # Throughput
-        qos_satisfaction = da_info[:, 3]  # Current QoS
-        loads = da_info[:, 4]  # Load
-        da_positions = da_info[:, 5:7]  # DA positions
+        Args:
+            run_dir: Directory containing the CSV files with trajectory data
+        """
+        import pandas as pd
+        import matplotlib.pyplot as plt
+        import numpy as np
+        import os
+        import glob
         
-        # 1. MOVEMENT: Move toward most critical DA
-        # Criticality score combines QoS violation + queue + delay
-        qos_violations = 1.0 - qos_satisfaction  # Higher = worse
-        normalized_queues = queues / (queues.max() + 1e-6)
-        normalized_delays = delays / (delays.max() + 1e-6)
+        # Find all CSV files (excluding trajectory-specific files if they exist)
+        csv_files = glob.glob(os.path.join(run_dir, '*.csv'))
+        csv_files = [f for f in csv_files if 'trajectory' not in os.path.basename(f)]
         
-        criticality = (0.5 * qos_violations + 
-                      0.3 * normalized_queues + 
-                      0.2 * normalized_delays)
+        if not csv_files:
+            print(f"No CSV files found in {run_dir}")
+            return
         
-        most_critical_da = np.argmax(criticality)
-        target_position = da_positions[most_critical_da]
+        print(f"Found {len(csv_files)} baseline result files")
         
-        # Calculate direction to most critical DA
-        current_pos = uav_state[:2]
-        direction = target_position - current_pos
-        distance = np.linalg.norm(direction)
+        # Base colors for different UAVs
+        base_colors = ['blue', 'orange', 'green', 'red', 'purple', 'brown']
         
-        # Adaptive movement: faster toward critical, slower when close
-        if distance > 0:
-            movement = direction / distance  # Normalize
-            speed_factor = min(1.0, distance / 50.0)  # Slow down when close
-            movement = movement * speed_factor
-        else:
-            movement = np.array([0.0, 0.0])
+        # Create figure with subplots for each baseline
+        num_baselines = len(csv_files)
+        fig, axes = plt.subplots(1, num_baselines, figsize=(7*num_baselines, 6))
+        if num_baselines == 1:
+            axes = [axes]
         
-        # Height adjustment based on coverage needs
-        if criticality.max() > 0.5:  # High criticality
-            altitude = 0.3  # Lower for better signal
-        else:
-            altitude = 0.0  # Medium height
+        fig.suptitle('UAV Trajectories - Color Intensity Shows Temporal Progression', 
+                    fontsize=16, fontweight='bold')
         
-        position_action = np.array([movement[0], movement[1], altitude])
+        # Store distance information for summary
+        distance_summary = {}
         
-        # 2. POWER: Adaptive based on demand and battery
-        battery_level = uav_state[4]
-        avg_qos = qos_satisfaction.mean()
+        for idx, csv_path in enumerate(csv_files):
+            # Extract baseline name from filename
+            baseline_name = os.path.basename(csv_path).replace('.csv', '').replace('_', ' ')
+            print(f"\nProcessing: {baseline_name}")
+            
+            # Read CSV
+            df = pd.read_csv(csv_path)
+            # Extract 500 steps from df
+            df = df.head(500)
+            
+            # Find UAV columns (columns ending with _pos_x, _pos_y, _pos_z)
+            uav_ids = set()
+            for col in df.columns:
+                if '_pos_x' in col:
+                    uav_id = col.replace('_pos_x', '')
+                    uav_ids.add(uav_id)
+            
+            uav_ids = sorted(list(uav_ids))
+            print(f"  Found {len(uav_ids)} UAVs: {uav_ids}")
+            
+            ax = axes[idx]
+            
+            # Track total distance for this baseline
+            total_distance = 0.0
+            uav_distances = {}
+            
+            # Plot each UAV's trajectory with color gradient
+            for uav_idx, uav_id in enumerate(uav_ids):
+                # Extract positions
+                x_col = f'{uav_id}_pos_x'
+                y_col = f'{uav_id}_pos_y'
+                
+                x = df[x_col].values
+                y = df[y_col].values
+                
+                # Calculate distance traveled by this UAV
+                distances = np.sqrt(np.diff(x)**2 + np.diff(y)**2)
+                uav_distance = np.sum(distances)
+                uav_distances[uav_id] = uav_distance
+                total_distance += uav_distance
+                
+                # Create line segments for gradient coloring
+                points = np.array([x, y]).T.reshape(-1, 1, 2)
+                segments = np.concatenate([points[:-1], points[1:]], axis=1)
+                
+                # Create color gradient (from pale to strong)
+                n_points = len(x)
+                base_color = base_colors[uav_idx % len(base_colors)]
+                
+                # Create LineCollection with varying alpha/color intensity
+                alphas = np.linspace(0.1, 1.0, n_points - 1)  # From pale to strong
+                
+                # Plot using segments with varying alpha
+                for i in range(len(segments)):
+                    alpha = alphas[i]
+                    ax.plot([segments[i][0][0], segments[i][1][0]], 
+                        [segments[i][0][1], segments[i][1][1]], 
+                        color=base_color, alpha=alpha, linewidth=2)
+                
+                # Mark start position (pale)
+                ax.scatter(x[0], y[0], color=base_color, marker='o', s=150, 
+                        alpha=0.4, edgecolors='black', linewidths=2, zorder=5)
+                
+                # Mark end position (strong)
+                ax.scatter(x[-1], y[-1], color=base_color, marker='s', s=150, 
+                        alpha=1.0, edgecolors='black', linewidths=2, zorder=5,
+                        label=f'{uav_id}')
+                
+                print(f"    ✓ Plotted trajectory for {uav_id}: {len(x)} points")
+            
+            # Configure subplot
+            ax.set_xlabel('X (m)', fontsize=11)
+            ax.set_ylabel('Y (m)', fontsize=11)
+            ax.set_title(baseline_name, fontsize=12, fontweight='bold')
+            ax.legend(loc='best')
+            ax.grid(True, alpha=0.3)
+            ax.set_aspect('equal')
+            ax.set_xlim(0, 2000)
+            ax.set_ylim(0, 2000)
+            
+            # Store distance information
+            distance_summary[baseline_name] = {
+                'total': total_distance,
+                'per_uav': uav_distances
+            }
+            
+            # Print distance information for this baseline
+            print(f"  Total distance traveled by all UAVs: {total_distance:.2f} m")
+            for uav_id, dist in uav_distances.items():
+                print(f"    - {uav_id}: {dist:.2f} m")
         
-        if battery_level < 0.3:  # Low battery - conserve
-            power = 0.3
-        elif avg_qos < 0.6:  # Poor QoS - boost power
-            power = 0.9
-        elif criticality.max() > 0.7:  # Critical DA exists
-            power = 0.8
-        else:  # Normal operation
-            power = 0.6
+        plt.tight_layout()
         
-        power_action = np.array([power])
+        # Save each subplot separately
+        for idx, ax in enumerate(axes):
+            # Create a new figure for each subplot
+            fig_single = plt.figure(figsize=(7, 6))
+            ax_single = fig_single.add_subplot(111)
+            
+            # Re-read and plot data for this subplot
+            csv_path = csv_files[idx]
+            baseline_name = os.path.basename(csv_path).replace('.csv', '').replace('_', ' ')
+            
+            df = pd.read_csv(csv_path)
+            df = df.head(500)
+            
+            # Find UAV columns
+            uav_ids = set()
+            for col in df.columns:
+                if '_pos_x' in col:
+                    uav_id = col.replace('_pos_x', '')
+                    uav_ids.add(uav_id)
+            uav_ids = sorted(list(uav_ids))
+            
+            # Plot trajectories
+            for uav_idx, uav_id in enumerate(uav_ids):
+                x_col = f'{uav_id}_pos_x'
+                y_col = f'{uav_id}_pos_y'
+                
+                x = df[x_col].values
+                y = df[y_col].values
+                
+                points = np.array([x, y]).T.reshape(-1, 1, 2)
+                segments = np.concatenate([points[:-1], points[1:]], axis=1)
+                
+                n_points = len(x)
+                base_color = base_colors[uav_idx % len(base_colors)]
+                alphas = np.linspace(0.1, 1.0, n_points - 1)
+                
+                for i in range(len(segments)):
+                    alpha = alphas[i]
+                    ax_single.plot([segments[i][0][0], segments[i][1][0]], 
+                        [segments[i][0][1], segments[i][1][1]], 
+                        color=base_color, alpha=alpha, linewidth=2)
+                
+                ax_single.scatter(x[0], y[0], color=base_color, marker='o', s=150, 
+                        alpha=0.4, edgecolors='black', linewidths=2, zorder=5)
+                
+                ax_single.scatter(x[-1], y[-1], color=base_color, marker='s', s=150, 
+                        alpha=1.0, edgecolors='black', linewidths=2, zorder=5,
+                        label=f'{uav_id}')
+            
+            ax_single.set_xlabel('X (m)', fontsize=11)
+            ax_single.set_ylabel('Y (m)', fontsize=11)
+            ax_single.set_title(baseline_name, fontsize=12, fontweight='bold')
+            ax_single.legend(loc='best')
+            ax_single.grid(True, alpha=0.3)
+            ax_single.set_aspect('equal')
+            ax_single.set_xlim(0, 2000)
+            ax_single.set_ylim(0, 2000)
+            
+            # Save individual subplot
+            output_path = os.path.join(run_dir, f'trajectory_{idx+1}.pdf')
+            plt.tight_layout()
+            fig_single.savefig(output_path, format='pdf', bbox_inches='tight')
+            print(f"✓ Saved subplot {idx+1} to {output_path}")
+            plt.close(fig_single)
         
-        # 3. BANDWIDTH: Proportional to weighted demand with fairness
-        # Demand score combines multiple factors
-        demand_scores = (
-            0.4 * normalized_queues +  # Queue pressure
-            0.3 * qos_violations +      # QoS violations
-            0.2 * normalized_delays +   # Delay issues
-            0.1 * (loads / (loads.max() + 1e-6))  # Current load
-        )
+        # Save combined figure
+        output_path_combined = os.path.join(run_dir, 'trajectories_colored.pdf')
+        fig.savefig(output_path_combined, format='pdf', bbox_inches='tight')
+        print(f"\n✓ Saved combined trajectory plot to {output_path_combined}")
         
-        # Apply fairness: ensure minimum allocation
-        min_allocation = 0.05  # 5% minimum per DA
-        available_bandwidth = 1.0 - (9 * min_allocation)
+        # Print summary comparison
+        print("\n" + "="*60)
+        print("DISTANCE SUMMARY - COMPARISON ACROSS ALL METHODS")
+        print("="*60)
+        for method_name, distances in distance_summary.items():
+            print(f"\n{method_name}:")
+            print(f"  Total distance: {distances['total']:.2f} m")
+            print(f"  Average per UAV: {distances['total']/len(distances['per_uav']):.2f} m")
+        print("\n" + "="*60)
         
-        # Distribute available bandwidth proportionally to demand
-        if demand_scores.sum() > 0:
-            proportional_allocation = (demand_scores / demand_scores.sum()) * available_bandwidth
-            bandwidth = proportional_allocation + min_allocation
-        else:
-            bandwidth = np.ones(9) / 9  # Equal if no demand info
-        
-        # Ensure normalization
-        bandwidth = bandwidth / bandwidth.sum()
-        
-        # Combine all actions
-        action = np.concatenate([position_action, power_action, bandwidth])
-        
-        return action
+        plt.show()
+
+
 
 def main():
     import argparse
@@ -1640,11 +1050,13 @@ def main():
     parser = argparse.ArgumentParser(description='Compare baseline agents')
     parser.add_argument('--env_config', type=str, default='config/environment/default.yaml',
                        help='Path to environment config')
-    parser.add_argument('--checkpoint', type=str, default='saved_models/model6/checkpoints/checkpoint_step_190000.pth',
-                       help='Path to trained MADRL model checkpoint')
+    parser.add_argument('--checkpoint_maddpg', type=str, default='saved_models_maddpg/model13/checkpoints/checkpoint_step_1000000.pth',
+                       help='Path to trained MADDPG model checkpoint')
+    parser.add_argument('--checkpoint_mappo', type=str, default='saved_models/mappo/model4/checkpoints/checkpoint_step_1000000.pth',
+                       help='Path to trained MAPPO model checkpoint')
     parser.add_argument('--steps', type=int, default=2000,
                        help='Number of steps for evaluation')
-    parser.add_argument('--seed', type=int, default=45,
+    parser.add_argument('--seed', type=int, default=43,
                        help='Random seed for reproducibility')
     args = parser.parse_args()
     
@@ -1678,50 +1090,39 @@ def main():
     # Initialize agents
     agents = []
     
-    # Random Agent
-    # random_agent = RandomAgent(num_agents, obs_dim, action_dim)
-    # agents.append((random_agent, "Random"))
-
-    # # Additional Baseline Agents
-    # smart_greedy_agent = SmartGreedyAgent(num_agents, obs_dim, action_dim, env)
-    # agents.append((smart_greedy_agent, "Smart Greedy"))
+    random_agent = RandomAgent(num_agents, obs_dim, action_dim)
+    agents.append((random_agent, "Random"))
 
     qos_greedy_agent = QoSAwareHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
     agents.append((qos_greedy_agent, "QoS-Aware Greedy"))
 
-    # energy_aware_agent = EnergyAwareGreedyAgent(num_agents, obs_dim, action_dim, env)
-    # agents.append((energy_aware_agent, "Energy-Aware Greedy"))
-
-    # dynamic_height_agent = DynamicHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
-    # agents.append((dynamic_height_agent, "Dynamic Height Greedy"))
-
     coverage_greedy_agent = CoverageMaximizationGreedyAgent(num_agents, obs_dim, action_dim, env)
     agents.append((coverage_greedy_agent, "Coverage Greedy"))
 
-    # adaptive_height_agent = AdaptiveHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
-    # agents.append((adaptive_height_agent, "Adaptive Height Greedy"))
 
-    # 3. Trained MADRL Agent (if checkpoint provided)
-    if args.checkpoint:
-        trained_agent = MADRLAgent(
+    # MADDPG agent (if checkpoint provided)
+    if args.checkpoint_maddpg:
+        maddpg_agent = MADDPGAgent(
             num_agents=num_agents,
             obs_dim=obs_dim,
             action_dim=action_dim,
             training=False
         )
-        trained_agent.load_models(args.checkpoint)
-        agents.append((trained_agent, "MADRL (Trained)"))
-        print(f"✓ Loaded trained model from {args.checkpoint}\n")
+        maddpg_agent.load_models(args.checkpoint_maddpg)
+        agents.append((maddpg_agent, "MADDPG"))
+        print(f"✓ Loaded MADDPG model from {args.checkpoint_maddpg}\n")
 
-    # Another trained agent
-    agent2 = MADRLAgent(
+    if args.checkpoint_mappo:
+        mappo_agent = MAPPOAgent(
             num_agents=num_agents,
             obs_dim=obs_dim,
             action_dim=action_dim,
             training=False
         )
-    agent2.load_models('saved_models/model9/checkpoints/checkpoint_step_560000.pth')
-    # agents.append((agent2, "MADRL (Model 6)"))
+        mappo_agent.load_models(args.checkpoint_mappo)
+        mappo_agent_wrapper = MAPPOWrapper(mappo_agent)
+        agents.append((mappo_agent_wrapper, "MAPPO"))
+        print(f"✓ Loaded MAPPO model from {args.checkpoint_mappo}\n")
 
     # Evaluate all agents on the same environment
     results_list = []
@@ -1744,8 +1145,6 @@ def main():
     evaluator.compare_agents(evaluator.run_dir)
     # evaluator.compare_agents("baseline_results/run_20251025_171841")
     
-
-    
     print(f"\n{'='*60}")
     print("Evaluation Complete!")
     print(f"Results saved to: {evaluator.run_dir}")
@@ -1756,7 +1155,12 @@ def plot(path: str):
     evaluator = EvaluationFramework(env_config_path='config/environment/default.yaml')
     evaluator.compare_agents(path)
 
+def trajectory_plot(path: str):
+
+    evaluator = EvaluationFramework(env_config_path='config/environment/default.yaml')
+    evaluator.plot_trajectory(path)
 
 if __name__ == "__main__":
     main()
     # plot('baseline_results/run_20251028_121654')
+    # trajectory_plot('baseline_results/run_20251208_174702')

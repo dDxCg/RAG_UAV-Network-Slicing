@@ -6,7 +6,7 @@ import numpy as np
 import math
 from typing import Dict, List, Tuple, Optional
 from environment import NetworkSlicingEnv, UAV, UE, DemandArea
-from agents import MADRLAgent
+from agents import MADDPGAgent
 from utils import *
 import argparse
 from baseline import *
@@ -23,7 +23,7 @@ class Camera3D:
         self.distance = 2000
         self.theta = math.pi / 4
         self.phi = math.pi / 6
-        self.target = np.array([500, 0.0, 500.0])
+        self.target = np.array([1000, 0.0, 1000.0])
         self.position = self.calculate_position()
         
     def calculate_position(self):
@@ -131,7 +131,7 @@ class UISlider:
 class Network3DVisualizer:
     """3D Visualizer for UAV Network Slicing with enhanced controls"""
     
-    def __init__(self, env: NetworkSlicingEnv, agent: Optional[MADRLAgent] = None,
+    def __init__(self, env: NetworkSlicingEnv, agent: Optional[MADDPGAgent] = None,
                  window_width: int = 1600, window_height: int = 900, enable_profiling: bool = False):
         pygame.init()
         
@@ -1277,7 +1277,7 @@ def profile_training_step():
     env = NetworkSlicingEnv(config_path="config/environment/default.yaml")
     obs = env._get_observations()
     
-    agent = MADRLAgent(
+    agent = MADDPGAgent(
         num_agents=env.num_uavs,
         obs_dim=len(list(obs.values())[0]),
         action_dim=4 + env.num_das_per_slice * 3
@@ -1332,7 +1332,7 @@ def profile_training_step():
 
 def main():
     parser = argparse.ArgumentParser(description='Enhanced UAV Network 3D Visualizer')
-    parser.add_argument('--checkpoint', type=str, default="./saved_models/model29",
+    parser.add_argument('--checkpoint', type=str, default="./saved_models/model15/checkpoints/checkpoint_step_2520000.pth",
                        help='Path to trained model checkpoint')
     
     # ============================================
@@ -1349,19 +1349,18 @@ def main():
     # Load agent
     agent = None
     if args.checkpoint:
-        model_dir = args.checkpoint
-        model_checkpoint = "./saved_models/model9/checkpoints/checkpoint_step_560000.pth"
+        model_checkpoint = args.checkpoint
         env_config = Configuration("./config/environment/default.yaml")
         num_agents = env_config.system.num_uavs
         obs_dim = 80
         action_dim = 13
-        agent = MADRLAgent(num_agents=num_agents, obs_dim=obs_dim, action_dim=action_dim, training=False)
+        agent = MADDPGAgent(num_agents=num_agents, obs_dim=obs_dim, action_dim=action_dim, training=False)
         agent.load_models(model_checkpoint)
         print(f"✓ Loaded model from {model_checkpoint}")
 
-    # agent = DynamicHeightGreedyAgent(len(env.uavs), 80, 13, env)
     # agent = RandomAgent(len(env.uavs), 80, 13)
     # agent = CoverageMaximizationGreedyAgent(len(env.uavs), 80, 13, env)
+    # agent = QoSAwareHeightGreedyAgent(len(env.uavs), 80, 13, env)
     
     # Create visualizer with profiling
     visualizer = Network3DVisualizer(

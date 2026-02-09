@@ -1,0 +1,308 @@
+# config/train/mappo_default.yaml
+# MAPPO Training Configuration for UAV Network Slicing
+# Adapted from MADDPG training configuration
+
+# ============================================
+# Training Duration
+# ============================================
+total_training_steps: 1000000    # Total number of environment steps
+                                 # MAPPO typically needs more steps than MADDPG
+                                 # Recommended: 1M-2M for production
+                                 # Quick test: 100K-200K
+
+# ============================================
+# Logging and Checkpointing
+# ============================================
+log_interval: 100                # Print training stats every N steps
+                                 # Lower = more verbose logging
+                                 # Typical: 50-200
+
+save_interval: 10000             # Save model checkpoint every N steps
+                                 # Balance between safety and disk space
+                                 # Typical: 5K-20K
+
+evaluation_interval: 5000        # Evaluate policy every N steps
+                                 # Run deterministic episodes to measure performance
+                                 # Typical: 2K-10K
+
+plot_interval: 10000             # Generate training plots every N steps
+                                 # Can be expensive for large datasets
+                                 # Typical: 5K-20K
+
+# ============================================
+# Directories
+# ============================================
+save_dir: "./saved_models/mappo"  # Root directory for saving models
+                                  # Will create subdirectories: model1, model2, ...
+                                  # Each run gets a new model folder
+
+# ============================================
+# Configuration Files
+# ============================================
+# These are set automatically by the training script:
+# env_config_path: "config/environment/default.yaml"
+# train_config_path: "config/train/mappo_default.yaml"
+
+# ============================================
+# MAPPO-SPECIFIC PARAMETERS
+# ============================================
+
+# Rollout Collection
+n_steps: 2048                    # Number of steps to collect before each training update
+                                 # This is the KEY difference from MADDPG
+                                 # Higher = more stable, slower wall-clock time
+                                 # Must be >= batch_size (defined in agent config)
+                                 # Recommended values:
+                                 #   - Fast iteration: 1024
+                                 #   - Balanced: 2048
+                                 #   - Sample efficient: 4096
+
+# Training Trigger
+min_buffer_size: 64              # Minimum rollout buffer size before training
+                                 # Safety check (should always have >= n_steps)
+                                 # Set to batch_size from agent config
+                                 # MUCH smaller than MADDPG's min_buffer_size (1000)
+
+
+# ============================================
+# REMOVED MADDPG PARAMETERS
+# ============================================
+
+# The following MADDPG parameters are NOT used in MAPPO:
+
+# train_frequency: 10            # ❌ REMOVED
+#                                # MAPPO trains after every rollout collection
+#                                # Not every N steps like MADDPG
+
+# train_iterations: 10           # ❌ REMOVED
+#                                # MAPPO controls this via n_epochs in agent config
+#                                # MADDPG did multiple gradient updates per call
+
+# exploration_noise_update_interval: 100  # ❌ REMOVED
+#                                # MAPPO uses natural exploration via entropy
+#                                # No manual noise schedule needed
+
+# greedy_experience_gathering_steps: 5000  # ❌ REMOVED
+#                                # MAPPO doesn't need greedy baseline
+#                                # No BC regularization
+
+# bc_regularization:             # ❌ REMOVED
+#   initial_weight: 0.8          # MAPPO is pure RL
+#   final_weight: 0.2            # No behavior cloning component
+#   transition_steps: 500000
+#   schedule_type: 'cosine'
+
+
+# ============================================
+# SCENARIO-SPECIFIC CONFIGURATIONS
+# ============================================
+
+# Configuration 1: Fast Prototyping
+# Good for: Quick experiments, debugging, hyperparameter search
+# total_training_steps: 100000
+# n_steps: 1024
+# min_buffer_size: 32
+# log_interval: 50
+# save_interval: 5000
+# evaluation_interval: 2000
+# plot_interval: 5000
+
+# Configuration 2: Balanced Training (DEFAULT)
+# Good for: Most use cases, good balance of speed and stability
+# total_training_steps: 1000000
+# n_steps: 2048
+# min_buffer_size: 64
+# log_interval: 100
+# save_interval: 10000
+# evaluation_interval: 5000
+# plot_interval: 10000
+
+# Configuration 3: Production Training
+# Good for: Final training runs, best performance
+# total_training_steps: 2000000
+# n_steps: 4096
+# min_buffer_size: 128
+# log_interval: 200
+# save_interval: 20000
+# evaluation_interval: 10000
+# plot_interval: 20000
+
+# Configuration 4: Limited Compute
+# Good for: CPU-only training, limited memory
+# total_training_steps: 500000
+# n_steps: 512
+# min_buffer_size: 32
+# log_interval: 100
+# save_interval: 10000
+# evaluation_interval: 5000
+# plot_interval: 10000
+
+
+# ============================================
+# TRAINING WORKFLOW
+# ============================================
+
+# Typical MAPPO training workflow:
+# 
+# 1. Collect n_steps (e.g., 2048) of experience
+#    - For each step:
+#      * Get stochastic actions from policy
+#      * Store (state, action, log_prob, reward, value)
+#      * Step environment
+#      * Reset if done
+# 
+# 2. Compute advantages using GAE
+#    - Uses stored values and rewards
+#    - Requires value of next state for bootstrapping
+# 
+# 3. Train for n_epochs (e.g., 10) on collected data
+#    - For each epoch:
+#      * Shuffle data
+#      * Split into mini-batches
+#      * Update policy and value function
+#      * Monitor KL divergence
+# 
+# 4. Clear buffer and repeat
+#    - On-policy: must discard old data
+#    - Cannot reuse like MADDPG
+
+
+# ============================================
+# PERFORMANCE TUNING
+# ============================================
+
+# To improve SAMPLE EFFICIENCY (fewer environment steps):
+# - Increase n_steps (2048 → 4096)
+# - Increase n_epochs in agent config (10 → 15)
+# - Increase batch_size in agent config (64 → 128)
+# Note: This will increase wall-clock time per update
+
+# To improve WALL-CLOCK TIME (faster training):
+# - Decrease n_steps (2048 → 1024)
+# - Decrease n_epochs in agent config (10 → 5)
+# - Decrease batch_size in agent config (64 → 32)
+# Note: This will decrease sample efficiency
+
+# To improve STABILITY:
+# - Increase n_steps (2048 → 4096)
+# - Decrease clip_epsilon in agent config (0.2 → 0.15)
+# - Increase batch_size in agent config (64 → 128)
+
+# To improve EXPLORATION:
+# - Increase entropy_coef in agent config (0.01 → 0.05)
+# - Start training with higher entropy, decay later
+
+
+# ============================================
+# MONITORING CHECKLIST
+# ============================================
+
+# During training, monitor these metrics:
+# 
+# ✓ Reward: Should trend upward
+# ✓ Policy Loss: May fluctuate, watch for trends
+# ✓ Value Loss: Should decrease over time
+# ✓ Entropy: Should decrease slowly (not collapse)
+# ✓ Approx KL: Should stay < 0.02
+# ✓ Clip Fraction: Healthy range 10-30%
+# ✓ Explained Variance: Higher is better (>0.7 is good)
+# 
+# Warning signs:
+# ⚠️  Reward not improving: Check reward scaling, increase n_steps
+# ⚠️  High KL (>0.05): Decrease learning rate or enable target_kl
+# ⚠️  Clip fraction >50%: Policy changing too fast, decrease clip_epsilon
+# ⚠️  Entropy →0: Policy too deterministic, increase entropy_coef
+# ⚠️  Value loss not decreasing: Increase critic_lr
+
+
+# ============================================
+# COMPARISON: MADDPG vs MAPPO TRAINING
+# ============================================
+
+# MADDPG Training Cycle:
+# for step in range(total_steps):
+#     action = policy(state)            # Deterministic + noise
+#     next_state, reward = env.step()
+#     buffer.store(s, a, r, s')         # Store in replay buffer
+#     
+#     if step % train_frequency == 0:   # Train every 10 steps
+#         for _ in range(10):            # 10 gradient updates
+#             batch = buffer.sample()    # Sample random batch
+#             update_policy_and_critic()
+# 
+# Key: OFF-POLICY, trains frequently on old data
+
+# MAPPO Training Cycle:
+# while step < total_steps:
+#     # Phase 1: Collect rollout (2048 steps)
+#     for _ in range(n_steps):
+#         action, log_prob, value = policy(state)  # Stochastic
+#         next_state, reward = env.step()
+#         buffer.store(s, a, log_p, r, v)
+#     
+#     # Phase 2: Train on rollout (discard after)
+#     advantages = compute_gae()
+#     for epoch in range(10):            # 10 epochs
+#         for batch in shuffle(rollout): # Mini-batches
+#             update_policy_and_critic()
+#     buffer.clear()                     # Discard old data
+# 
+# Key: ON-POLICY, trains on fresh data only
+
+
+# ============================================
+# EXPECTED TRAINING TIME
+# ============================================
+
+# With default settings (1M steps, n_steps=2048):
+# - Number of training updates: ~488 (1M / 2048)
+# - Updates per epoch: 488 * 10 = 4,880 gradient steps
+# 
+# Estimated time (with visualization OFF):
+# - GPU (RTX 3090): ~3-5 hours
+# - GPU (RTX 2080): ~5-8 hours
+# - CPU only: ~20-30 hours (not recommended)
+# 
+# With visualization ON: Add 30-50% overhead
+
+# Note: MAPPO is typically 2-3x slower than MADDPG in wall-clock time
+# But provides more stable training and better final performance
+
+
+# ============================================
+# FILE OUTPUTS
+# ============================================
+
+# Training will create the following structure:
+# 
+# saved_models/mappo/
+# └── model1/                    # Auto-incremented
+#     ├── env_config.yaml        # Copy of environment config
+#     ├── train_config.yaml      # Copy of this file
+#     ├── agents_config.yaml     # Copy of agent config
+#     ├── step_metrics.csv       # Environment metrics (every step)
+#     ├── training_metrics.csv   # Training metrics (every rollout)
+#     ├── checkpoints/
+#     │   ├── checkpoint_step_10000.pth
+#     │   ├── checkpoint_step_20000.pth
+#     │   └── ...
+#     └── training_progress/
+#         ├── mappo_training_progress_step_10000.png
+#         ├── mappo_training_progress_step_20000.png
+#         └── ...
+
+
+# ============================================
+# RESUMING TRAINING
+# ============================================
+
+# To resume from a checkpoint:
+# 1. In train_mappo_optimized_periodic.py, set:
+#    checkpoint_file = "saved_models/mappo/model1/checkpoints/checkpoint_step_50000.pth"
+# 
+# 2. Adjust total_training_steps if needed
+# 
+# 3. Run training as normal
+# 
+# Note: Training will continue from the checkpoint
+# Metrics will be appended to existing CSV files

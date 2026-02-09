@@ -3,7 +3,7 @@
 
 import numpy as np
 from environment import NetworkSlicingEnv
-from agents import BCWeightScheduler, MADRLAgent
+from agents import BCWeightScheduler, MADDPGAgent
 from visualizer import Network3DVisualizer
 import os
 from tqdm import tqdm
@@ -55,8 +55,6 @@ class TrainingManager:
 
             # Paths
             'save_dir': train_config.save_dir,
-            'log_dir': train_config.log_dir,
-            'tensorboard_dir': train_config.tensorboard_dir,
             
             # Config paths
             'env_config_path': env_config_path,
@@ -96,7 +94,7 @@ class TrainingManager:
         print(f"Observation dimension: {obs_dim}")
         print(f"Action dimension: {act_dim}")
 
-        self.MADRLagent = MADRLAgent(
+        self.MADRLagent = MADDPGAgent(
             num_agents=self.config['num_uavs'],
             obs_dim=obs_dim,
             action_dim=act_dim,
@@ -108,7 +106,19 @@ class TrainingManager:
             # self.MADRLagent.reset_optimizer_state()  
             print(f"Loaded checkpoint from {checkpoint_path}")
 
+        # Exploration control
         self.exploration_num = 1
+
+        # Behavior cloning weight scheduler
+        self.bc_scheduler = BCWeightScheduler(
+            initial_weight=self.config['bc_regularization']['initial_weight'],
+            final_weight=self.config['bc_regularization']['final_weight'],
+            transition_steps=self.config['bc_regularization']['transition_steps'],
+            schedule_type=self.config['bc_regularization']['schedule_type']
+        )
+
+        # Greedy agent for experience gathering
+        self.greedy_agent = CoverageMaximizationGreedyAgent(self.env.num_uavs, obs_dim, act_dim, self.env)
 
         # Visualization        
         self.enable_visualization = enable_visualization
@@ -332,10 +342,16 @@ class TrainingManager:
             
             self._handle_visualization_events()
             
+            # Gather actions
             actions = self.MADRLagent.select_actions(observations, explore=True)
-            
+            greedy_actions = self.greedy_agent.select_actions(observations, explore=False)
+
             next_observations, reward, done, info = self.env.step(actions)
-            self.MADRLagent.store_transition(observations, actions, actions, reward, next_observations, done)
+            self.MADRLagent.store_transition(observations, actions, greedy_actions, reward, next_observations, done)
+
+            # Update BC weight
+            bc_weight = self.bc_scheduler.get_weight()
+            self.bc_scheduler.step()
 
             # Check if we should train
             should_train = (
@@ -351,9 +367,7 @@ class TrainingManager:
                 bc_losses_list = []
                 
                 for _ in range(self.config['train_iterations']):
-                    train_info = self.MADRLagent.train_rl_with_bc_regularization(
-                        bc_weight=0
-                    )
+                    train_info = self.MADRLagent.train(bc_weight=bc_weight)
                     if train_info:
                         # Collect losses from all agents
                         actor_losses.append(np.mean(train_info['actor_losses']))
@@ -377,17 +391,16 @@ class TrainingManager:
 
                     self.training_metrics['rl_losses'].append(np.mean(rl_losses_list))
                     self.training_metrics['bc_losses'].append(np.mean(bc_losses_list))
-                    self.training_metrics['bc_weights'].append(0)
+                    self.training_metrics['bc_weights'].append(bc_weight)
                     
                     # Update progress bar with training info
                     progress_bar.set_postfix({
                         'Reward': f'{reward:.3f}',
-                        'BC Weight': f'{0:.3f}',
+                        'BC Weight': f'{bc_weight:.3f}',
+                        'Buffer': f'{len(self.MADRLagent.buffer)}',
                         'Actor Loss': f'{np.mean(actor_losses):.4f}',
                         'RL Loss': f'{np.mean(rl_losses_list):.4f}',
                         'BC Loss': f'{np.mean(bc_losses_list):.4f}',
-                        'Buffer': f'{len(self.MADRLagent.buffer)}'
-
                     })
             
             # Store environment metrics (every step)
@@ -414,12 +427,12 @@ class TrainingManager:
             # Update exploration noise less frequently
             if  (step + 1) % self.config['exploration_noise_update_interval'] == 0:
                 self.MADRLagent.exploration_noise = max(
-                    self.MADRLagent.min_noise,
+                    self.MADRLagent.min_noise,  
                     self.MADRLagent.exploration_noise * self.MADRLagent.noise_decay
                 )
-                if self.MADRLagent.exploration_noise <= self.MADRLagent.min_noise and self.exploration_num == 1:
+                if self.MADRLagent.exploration_noise <= self.MADRLagent.min_noise:
                     self.MADRLagent.exploration_noise = self.MADRLagent.re_exploration_noise
-                    self.exploration_num += 1
+                    
 
         # Cleanup
         if self.visualizer is not None:
@@ -875,7 +888,7 @@ def profile_training_step():
     env = NetworkSlicingEnv(config_path="config/environment/default.yaml")
     obs = env.reset()
     
-    agent = MADRLAgent(
+    agent = MADDPGAgent(
         num_agents=env.num_uavs,
         obs_dim=len(list(obs.values())[0]),
         action_dim=4 + env.num_das_per_slice * 3
