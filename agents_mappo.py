@@ -531,12 +531,12 @@ class MAPPOAgent:
         print(f"  Rollout steps: {self.n_steps}")
         print(f"  Batch size: {self.batch_size}")
         print(f"  Pin memory: {self.pin_memory}")
-        print(f"🎮 Agent Device: {self.device}")
+        print(f"  Agent Device: {self.device}")
         if self.device.type == 'cuda':
             print(f"   GPU: {torch.cuda.get_device_name(0)}")
             print(f"   Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
         else:
-            print("   ⚠️  WARNING: Using CPU! Training will be slow!")
+            print("      WARNING: Using CPU! Training will be slow!")
         print(f"  PPO epochs: {self.n_epochs}")
         print(f"  Clip epsilon: {self.clip_epsilon}")
         print(f"  GAE lambda: {self.gae_lambda}")
@@ -845,48 +845,48 @@ class MAPPOAgent:
         self.buffer.clear()
 
 
-if __name__ == "__main__":
-    from torchview import draw_graph
+# if __name__ == "__main__":
+#     from torchview import draw_graph
 
-    NUM_AGENTS = 5       # 5 UAVs
-    STATE_DIM = 80       # Kích thước state của 1 UAV
-    ACTION_DIM = 13      # Kích thước action của 1 UAV
-    BATCH_SIZE = 1       # Để vẽ hình thì batch size là 1
+#     NUM_AGENTS = 5       # 5 UAVs
+#     STATE_DIM = 80       # Kích thước state của 1 UAV
+#     ACTION_DIM = 13      # Kích thước action của 1 UAV
+#     BATCH_SIZE = 1       # Để vẽ hình thì batch size là 1
 
-    # 3. Tạo Model
-    # Actor
-    actor = ActorNetworkPPO(obs_dim=STATE_DIM, action_dim=ACTION_DIM)
+#     # 3. Tạo Model
+#     # Actor
+#     actor = ActorNetworkPPO(obs_dim=STATE_DIM, action_dim=ACTION_DIM)
     
-    # Critic
-    critic = CriticNetworkPPO(state_dim=STATE_DIM, num_agents=NUM_AGENTS)
+#     # Critic
+#     critic = CriticNetworkPPO(state_dim=STATE_DIM, num_agents=NUM_AGENTS)
 
-    # 4. Tạo Dummy Inputs
-    # Actor: single observation
-    dummy_obs = torch.randn(BATCH_SIZE, STATE_DIM)
+#     # 4. Tạo Dummy Inputs
+#     # Actor: single observation
+#     dummy_obs = torch.randn(BATCH_SIZE, STATE_DIM)
     
-    # Critic: all agents' observations
-    dummy_states = torch.randn(BATCH_SIZE, NUM_AGENTS * STATE_DIM)
+#     # Critic: all agents' observations
+#     dummy_states = torch.randn(BATCH_SIZE, NUM_AGENTS * STATE_DIM)
 
-    # 5. Vẽ đồ thị Actor
-    actor_graph = draw_graph(
-        actor, 
-        input_data=dummy_obs,
-        graph_name="MAPPO_Actor_Architecture",
-        expand_nested=True,
-        save_graph=False,
-    )
-    actor_graph.visual_graph.attr(rankdir='TB')
-    actor_graph.visual_graph.render("mappo_actor_viz_high_res", format="pdf", cleanup=True)
-    print("Đã xuất file PDF Actor: mappo_actor_viz_high_res.pdf")
+#     # 5. Vẽ đồ thị Actor
+#     actor_graph = draw_graph(
+#         actor, 
+#         input_data=dummy_obs,
+#         graph_name="MAPPO_Actor_Architecture",
+#         expand_nested=True,
+#         save_graph=False,
+#     )
+#     actor_graph.visual_graph.attr(rankdir='TB')
+#     actor_graph.visual_graph.render("mappo_actor_viz_high_res", format="pdf", cleanup=True)
+#     print("Đã xuất file PDF Actor: mappo_actor_viz_high_res.pdf")
     
-    # 6. Vẽ đồ thị Critic
-    critic_graph = draw_graph(
-        critic, 
-        input_data=dummy_states,
-        graph_name="MAPPO_Critic_Architecture",
-        expand_nested=True,
-        save_graph=False,
-    )
-    critic_graph.visual_graph.attr(rankdir='TB')
-    critic_graph.visual_graph.render("mappo_critic_viz_high_res", format="pdf", cleanup=True)
-    print("Đã xuất file PDF Critic: mappo_critic_viz_high_res.pdf")
+#     # 6. Vẽ đồ thị Critic
+#     critic_graph = draw_graph(
+#         critic, 
+#         input_data=dummy_states,
+#         graph_name="MAPPO_Critic_Architecture",
+#         expand_nested=True,
+#         save_graph=False,
+#     )
+#     critic_graph.visual_graph.attr(rankdir='TB')
+#     critic_graph.visual_graph.render("mappo_critic_viz_high_res", format="pdf", cleanup=True)
+#     print("Đã xuất file PDF Critic: mappo_critic_viz_high_res.pdf")

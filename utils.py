@@ -383,7 +383,7 @@ class Configuration:
     def _load_config(self):
         """Load YAML config and set nested attributes"""
         try:
-            with open(self.config_path, 'r') as f:
+            with open(self.config_path, 'r', encoding='utf-8') as f:
                 config_data = yaml.safe_load(f) or {}
             
             # Set all config keys as attributes (with nested support)
@@ -393,12 +393,12 @@ class Configuration:
                 else:
                     setattr(self, key, self._convert_value(value))
             
-            print(f"✓ Loaded config from {self.config_path}")
+            print(f" Loaded config from {self.config_path}")
             
         except FileNotFoundError:
-            print(f"❌ Config file not found: {self.config_path}")
+            print(f" Config file not found: {self.config_path}")
         except yaml.YAMLError as e:
-            print(f"❌ Error parsing YAML: {e}")
+            print(f" Error parsing YAML: {e}")
     
     def _convert_value(self, value):
         """Convert string numbers to appropriate types"""

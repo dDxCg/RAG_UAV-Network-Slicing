@@ -1,18 +1,10 @@
-# train_mappo_optimized_periodic.py - MAPPO VERSION
-# Adapted from MADDPG training script
-
 import numpy as np
 from environment import NetworkSlicingEnv
-from agents_mappo import MAPPOAgent  # ← Changed from MADDPGAgent
-from visualizer import Network3DVisualizer
+from agents_mappo import MAPPOAgent  
 import os
 from tqdm import tqdm
 import re
 from utils import Configuration
-import cProfile
-import pstats
-from pstats import SortKey
-import io
 
 class TrainingManagerMAPPO:
     """Manages the MAPPO training process with periodic visualizer toggle checks"""
@@ -116,7 +108,7 @@ class TrainingManagerMAPPO:
     def _print_instructions(self):
         """Print control instructions"""
         print("\n" + "="*70)
-        print("🎮 FILE-BASED CONTROLS:")
+        print("  FILE-BASED CONTROLS:")
         print("  To toggle visualization ON:  touch viz_on.flag")
         print("  To toggle visualization OFF: touch viz_off.flag")
         print("  To quit training:            touch quit.flag")
@@ -139,14 +131,14 @@ class TrainingManagerMAPPO:
         """Check for control file commands"""
         # Check for quit command
         if os.path.exists(self.quit_flag):
-            print("\n🛑 Quit flag detected, stopping training...")
+            print("\nQuit flag detected, stopping training...")
             os.remove(self.quit_flag)
             return 'quit'
         
         # Check for visualization toggle
         if os.path.exists(self.viz_on_flag):
             if not self.enable_visualization:
-                print("\n📺 Visualization ON flag detected, enabling...")
+                print("\nVisualization ON flag detected, enabling...")
                 self._initialize_visualizer()
             os.remove(self.viz_on_flag)
         
@@ -165,85 +157,6 @@ class TrainingManagerMAPPO:
         os.makedirs(model_dir, exist_ok=True)
         os.makedirs(os.path.join(model_dir, 'training_progress'), exist_ok=True)
         os.makedirs(os.path.join(model_dir, 'checkpoints'), exist_ok=True)
-
-    def _initialize_visualizer(self):
-        """Initialize the visualizer"""
-        if self.visualizer is None:
-            try:
-                import pygame
-                pygame.init()
-                self.visualizer = Network3DVisualizer(self.env, self.MAPPOagent)
-                self.enable_visualization = True
-                print("✅ Visualizer initialized")
-            except Exception as e:
-                print(f"❌ Failed to initialize visualizer: {e}")
-                self.visualizer = None
-                self.enable_visualization = False
-
-    def _cleanup_visualizer(self):
-        """Cleanup the visualizer"""
-        if self.visualizer is not None:
-            try:
-                import pygame
-                pygame.quit()
-                self.visualizer = None
-                self.enable_visualization = False
-                print("🔴 Visualizer closed")
-            except Exception as e:
-                print(f"⚠️  Error cleaning up visualizer: {e}")
-
-    def _handle_visualization_events(self):
-        """Handle events - only called periodically"""
-        if not self.enable_visualization or self.visualizer is None:
-            return
-        
-        import pygame
-        
-        # When ON: Handle all events
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self._cleanup_visualizer()
-                return
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_v:
-                    self._cleanup_visualizer()
-                    return
-                elif event.key == pygame.K_ESCAPE:
-                    self._cleanup_visualizer()
-                    return
-                elif event.key == pygame.K_c:
-                    self.visualizer.show_connections = not self.visualizer.show_connections
-                elif event.key == pygame.K_p:
-                    self.visualizer.show_paths = not self.visualizer.show_paths
-                elif event.key == pygame.K_d:
-                    self.visualizer.show_das = not self.visualizer.show_das
-                elif event.key == pygame.K_g:
-                    self.visualizer.show_grid = not self.visualizer.show_grid
-                elif event.key == pygame.K_TAB:
-                    if self.visualizer.selected_uav is None:
-                        self.visualizer.selected_uav = 0
-                    else:
-                        self.visualizer.selected_uav = (self.visualizer.selected_uav + 1) % len(self.visualizer.env.uavs)
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 4:
-                    self.visualizer.camera.zoom(-50)
-                elif event.button == 5:
-                    self.visualizer.camera.zoom(50)
-        
-        self.visualizer.handle_mouse()
-
-    def _update_visualization(self):
-        """Update the visualization window"""
-        if not self.enable_visualization or self.visualizer is None:
-            return
-        
-        import pygame
-        
-        self.visualizer.draw_3d_scene()
-        self.visualizer.draw_2d_overlay()
-        self.visualizer.animation_time += 0.016
-        pygame.display.flip()
-        self.visualizer.clock.tick(60)
 
     def _initialize_metrics(self):  
         # Initialize tracking variables for step-based training
@@ -302,15 +215,15 @@ class TrainingManagerMAPPO:
         shutil.copy(self.config['env_config_path'], os.path.join(self.model_dir, 'env_config.yaml'))
         shutil.copy(self.config['train_config_path'], os.path.join(self.model_dir, 'train_config.yaml'))
         shutil.copy('./config/agents/mappo_default.yaml', os.path.join(self.model_dir, 'agents_config.yaml'))
-        print(f"✓ Saved config files to {self.model_dir}")
+        print(f"Saved config files to {self.model_dir}")
 
     def train(self):
         """
         Main MAPPO training loop - ROLLOUT-BASED
         """
-        print(f"\n🚀 Starting MAPPO training for {self.config['total_training_steps']} steps")
-        print(f"📁 Saving to: {self.model_dir}")
-        print(f"📊 Rollout length: {self.MAPPOagent.n_steps} steps\n")
+        print(f"\nStarting MAPPO training for {self.config['total_training_steps']} steps")
+        print(f"Saving to: {self.model_dir}")
+        print(f"Rollout length: {self.MAPPOagent.n_steps} steps\n")
         
         observations = self.env.reset()
         global_step = 0
@@ -321,6 +234,10 @@ class TrainingManagerMAPPO:
         
         last_save_step = 0
         last_plot_step = 0
+
+        #Local list to track rewards
+        reward_log = []
+
         while global_step < self.config['total_training_steps']:
             # ============================================
             # PHASE 1: COLLECT ROLLOUT (n_steps)
@@ -333,8 +250,6 @@ class TrainingManagerMAPPO:
                     if self._check_control_files() == 'quit':
                         progress_bar.close()
                         return
-                
-                self._handle_visualization_events()
                 
                 # ============================================
                 # Select actions (MAPPO returns 3 values!)
@@ -361,10 +276,11 @@ class TrainingManagerMAPPO:
                 
                 # Store environment metrics
                 self._store_step_metrics(global_step, actions, reward, info)
+                reward_log.append(reward)
                 
                 # Update visualization if enabled
-                if self.enable_visualization and self.visualizer is not None:
-                    self._update_visualization()
+                # if self.enable_visualization and self.visualizer is not None:
+                #     self._update_visualization()
 
                 # Update tracking
                 episode_reward += reward
@@ -418,26 +334,23 @@ class TrainingManagerMAPPO:
                 self._save_checkpoint(global_step)
                 self._save_metrics_to_csv()
                 last_save_step = global_step
-                print(f"💾 Saved checkpoint at step {global_step}")
+                print(f"Saved checkpoint at step {global_step}")
 
             
             if global_step - last_plot_step > self.config['plot_interval'] and global_step > 0:
                 self._plot_training_progress(global_step)
                 last_plot_step = global_step
-                print(f"📊 Generated plots at step {global_step}")
-
-
+                print(f"Generated plots at step {global_step}")
 
         progress_bar.close()
-        
-        # Cleanup
-        if self.visualizer is not None:
-            self._cleanup_visualizer()
         
         # Final save
         self._save_checkpoint(global_step)
         self._save_metrics_to_csv()
         self._plot_training_progress(global_step)
+
+        avg_reward = np.mean(reward_log[-min(len(reward_log), self.MAPPOagent.n_steps * 5):])
+        return avg_reward
 
     def _store_step_metrics(self, step, actions, reward, info):
         """Store metrics for this step"""
@@ -733,7 +646,7 @@ class TrainingManagerMAPPO:
         """Save model checkpoint"""
         checkpoint_path = os.path.join(self.model_dir, 'checkpoints', f'checkpoint_step_{step}.pth')
         self.MAPPOagent.save_models(checkpoint_path)
-        print(f"✓ Checkpoint saved at step {step}")
+        print(f"Checkpoint saved at step {step}")
 
     def _save_metrics_to_csv(self):
         """Save metrics to CSV files"""
@@ -790,30 +703,3 @@ class TrainingManagerMAPPO:
             for key in self.training_metrics:
                 self.training_metrics[key].clear()
 
-
-def main():
-    """Main function to run MAPPO training"""
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--visualize', action='store_true', help='Show visualization during training')
-    args = parser.parse_args()
-
-    # Config files
-    env_config_file = "config/environment/default.yaml"
-    train_config_file = 'config/train/mappo_default.yaml'  # ← Use MAPPO config!
-    checkpoint_file = None
-    # checkpoint_file = "saved_models/mappo_model1/checkpoints/checkpoint_step_100000.pth"
-    
-    # Create training manager
-    trainer = TrainingManagerMAPPO(
-        env_config_path=env_config_file, 
-        train_config_path=train_config_file,
-        checkpoint_path=checkpoint_file,
-        enable_visualization=args.visualize
-    )
-
-    # Run training
-    trainer.train()
-
-if __name__ == "__main__":
-    main()

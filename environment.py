@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from numba import jit, prange
 from collections import defaultdict
 
-global_env_config = Configuration("config/environment/default.yaml")
+global_env_config = Configuration("config/environment/adaptive.yaml")
 global_beam_angle = global_env_config.uav_params['beam_angle']
 a = global_env_config.a2g['a']
 b = global_env_config.a2g['b']
