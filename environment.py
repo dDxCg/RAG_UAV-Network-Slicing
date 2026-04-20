@@ -1789,6 +1789,13 @@ class NetworkSlicingEnv:
         fairness_reward = self._calculate_fairness_index()
         
         # ============================================
+        # Sigmoid to reduce QoS signal
+        # ============================================ 
+        checkpoint = 0.6
+        steepness = 10
+        qos_reward = 1 / (1 + np.exp(-steepness * (qos_reward - checkpoint)))
+
+        # ============================================
         # Combine with weights
         # ============================================
         alpha = self.reward_weights.qos
@@ -2027,7 +2034,8 @@ class NetworkSlicingEnv:
             energy_consumption_penalty += zero_power_penalty * 0.2  # Add 0.2 penalty per zero-power UAV
 
         return energy_consumption_penalty
- 
+    
+    
     def _calculate_fairness_index(self) -> float:
         """PRODUCTION VERSION: Fast and clean"""
         if not self.sinr_cache_valid:

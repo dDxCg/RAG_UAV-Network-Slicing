@@ -3,6 +3,7 @@ import yaml
 from type import EnvConfig, KBEntry
 from kb_handling import add_to_kb, retrieve_candidates
 from llm import suggest_reward_weights
+from env_sampling import sample_env_config, update_env_config_file
 
 class ConfigTracker:
     def __init__(self, env_config_file):
@@ -21,7 +22,7 @@ class ConfigTracker:
 
     def _extract_env_obj(self):
         env_obj = EnvConfig(
-            embbb_prob=self.env_config['slicing']['slice_probabilities']['embb'],
+            embb_prob=self.env_config['slicing']['slice_probabilities']['embb'],
             urllc_prob=self.env_config['slicing']['slice_probabilities']['urllc'],
             mmtc_prob=self.env_config['slicing']['slice_probabilities']['mmtc'],
             arrival_rate=self.env_config['ue_dynamics']['arrival_rate'],
@@ -44,7 +45,9 @@ def main():
     config_tracker = ConfigTracker(env_config_file)
 
     while True:
-        # TODO: sampling environment configs
+        # Sampling environment configs
+        env = sample_env_config()
+        update_env_config_file(env, env_config_file)
         if config_tracker._check_env_changes():
             print("Environment updated. Retraining with new configuration...")
             config_tracker.env_config = config_tracker._load_env(env_config_file)

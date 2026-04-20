@@ -21,30 +21,5 @@ CREATE TABLE IF NOT EXISTS exp (
 )
 """)
 
-# Init data from csv file
-with open("exp_data.csv", "r") as f:
-    reader = csv.reader(f)
-    try:
-        header = next(reader)  # Skip header
-    except StopIteration:
-        print("Warning: The CSV file is empty!")
-        header = None
-    
-    for row in reader:
-        cursor.execute("""
-            INSERT INTO exp (
-                embb_prob, 
-                urllc_prob, 
-                mmtc_prob, 
-                arrival_rate, 
-                departure_rate, 
-                w_qos, 
-                w_energy, 
-                w_fairness, 
-                reward,
-                thinking)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, row)
-
-conn.commit()
+# TODO: Import data from jsonl file
 

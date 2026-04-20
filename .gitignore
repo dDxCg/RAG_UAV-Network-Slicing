@@ -1,5 +1,6 @@
 kb_log.db
 kb_log.db-journal
 saved_models
-exp_data.csv
+trial_logs
 __pycache__
+.env

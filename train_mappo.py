@@ -703,3 +703,19 @@ class TrainingManagerMAPPO:
             for key in self.training_metrics:
                 self.training_metrics[key].clear()
 
+def main():
+    env_config_file = "./config/environment/adaptive.yaml"
+    train_config_file = './config/train/mappo_default.yaml'
+    checkpoint_file = None
+    # checkpoint_file = "saved_models/mappo_model1/checkpoints/checkpoint_step_100000.pth"
+    
+    trainer = TrainingManagerMAPPO(
+        env_config_path=env_config_file,
+        train_config_path=train_config_file,
+        checkpoint_path=checkpoint_file
+    )
+
+    trainer.train()
+
+if __name__ == "__main__":
+    main()

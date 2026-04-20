@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 @dataclass
 class EnvConfig:
-    embbb_prob: float
+    embb_prob: float
     urllc_prob: float
     mmtc_prob: float
     arrival_rate: float
@@ -10,7 +10,7 @@ class EnvConfig:
     
     def __to_dict__(self):
         return {
-            'embb_prob': self.embbb_prob,
+            'embb_prob': self.embb_prob,
             'urllc_prob': self.urllc_prob,
             'mmtc_prob': self.mmtc_prob,
             'arrival_rate': self.arrival_rate,
