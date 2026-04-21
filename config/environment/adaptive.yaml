@@ -51,16 +51,16 @@ qos_weights:
     throughput: 0.1
 reward_weights:
   energy: 2.0
-  fairness: 2.0
-  qos: 6.0
+  fairness: 1.5
+  qos: 6.5
 sinr_thresholds:
   low_max: 10.0
   medium_max: 20.0
 slicing:
   slice_probabilities:
-    embb: 0.6199696529670397
-    mmtc: 0.3134690941038011
-    urllc: 0.06656125292915922
+    embb: 0.4441518457646405
+    mmtc: 0.15366945772023816
+    urllc: 0.40217869651512134
   slice_weights:
     embb: 0.4
     mmtc: 0.2
@@ -103,19 +103,19 @@ uav_params:
   max_power: 10.0
   velocity_max: 3.0
 ue_dynamics:
-  arrival_rate: 3.778470229346909
+  arrival_rate: 1.672046404329825
   change_direction_prob: 0.3
-  departure_rate: 3.6406507118748657
+  departure_rate: 1.45330191441703
   max_initial_velocity: 2.0
   max_ues_multiplier: 1.5
   patterns:
     stationary:
-      probability: 0.4290501217781594
+      probability: 0.6733784240703874
       speed: 0.0
     vehicle:
-      probability: 0.2921471470796331
+      probability: 0.20148282559838396
       speed: 1.0
     walk:
-      probability: 0.27880273114220766
+      probability: 0.12513875033122865
       speed: 0.1
   session_duration_avg: 300

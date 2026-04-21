@@ -1,12 +1,14 @@
 from train_mappo import TrainingManagerMAPPO
 import yaml
-from type import EnvConfig, KBEntry
-from kb_handling import add_to_kb, retrieve_candidates
+from type import EnvConfig, KBEntry, EnvVector, EvalVector
+from kb_handler import append_entry, query_similar_entries
 from llm import generate_response
 from env_sampling import sample_env_config, update_env_config_file
-from prompt_builder import build_prompt_fs
+from prompt_builder import build_prompt_fs, build_prompt_kb, build_prompt_zs
 from semantic_analyzer import numerical_analysis
 import time
+from db_config import connect_db
+
 class ConfigTracker:
     def __init__(self, env_config_file):
         self.env_config_file = env_config_file
@@ -42,7 +44,11 @@ class ConfigTracker:
         with open(self.env_config_file, 'w', encoding='utf-8') as f:
             yaml.dump(self.env_config, f)
     
+def _print_section(title):
+    print("\n" + f" {title} ".center(100, "=") + "\n")
+
 def main():
+    conn = connect_db()
     env_config_file = "config/environment/adaptive.yaml"
     train_config_file = 'config/train/mappo_default.yaml'  
     checkpoint_file = None
@@ -54,46 +60,47 @@ def main():
         env = sample_env_config()
         update_env_config_file(env, env_config_file)
         if config_tracker._check_env_changes():
-            print("Environment updated. Retraining with new configuration...")
+            _print_section("Environment Change Detected")
             config_tracker.env_config = config_tracker._load_env(env_config_file)
             env_obj = config_tracker._extract_env_obj()
             env_list = env_obj.__to_dict__()
             print(f"Current Environment: {env_list}")
 
-            # TODO: LLM-Guided reward weights
+            _print_section("Semantic Analysis & KB Retrieval")
             env = numerical_analysis(env_list)
-            # selected_exps = retrieve_candidates(env_obj)
-            prompt = build_prompt_fs(env)
-            print("LLM Analyzing...")
+
+            selected_exps = query_similar_entries(conn, EnvVector(env), EvalVector(env), top_k=3)
+            print(f"Retrieved {len(selected_exps)} similar experiences from KB for LLM analysis:\n{selected_exps}")
+            
+            prompt = build_prompt_kb(env, selected_exps)
+            
+            _print_section("LLM Analysis")
             start_time = time.time()
             results = generate_response(prompt)
             print(f"LLM finished in {time.time() - start_time:.2f} seconds.\n{results}")
             
-            # TODO: Update reward weights
             config_tracker._update_reward_weights(results)
             config_tracker.env_config = config_tracker._load_env(env_config_file)
 
-            trainer = TrainingManagerMAPPO(
-                env_config_path=env_config_file, 
-                train_config_path=train_config_file,
-                checkpoint_path=checkpoint_file
-            )
-
-            # reward = trainer.train()
-
-            # Update knowledge base
-            print("Updating knowledge base...")
-            # kb_entry = KBEntry(
-            #     env_config = env_obj,
-            #     w_qos = config_tracker.env_config['reward_weights']['qos'],
-            #     w_energy = config_tracker.env_config['reward_weights']['energy'],
-            #     w_fairness = config_tracker.env_config['reward_weights']['fairness'],
-            #     reward = round(float(reward), 2) if reward is not None else -1e9,
-            #     thinking = results['thinking']
+            _print_section("Training MAPPO")
+            # trainer = TrainingManagerMAPPO(
+            #     env_config_path=env_config_file, 
+            #     train_config_path=train_config_file,
+            #     checkpoint_path=checkpoint_file
             # )
-            # add_to_kb(kb_entry)
-
-            print("Cycle complete. Waiting for next environment change...")
+            # reward = trainer.train()
+            
+            log = {
+                **env,
+                **results,
+            }
+            # Update knowledge base
+            _print_section("Updating Knowledge Base")
+            entry = KBEntry(log)
+            print(f"Updating knowledge base: {entry}")
+            # append_entry(conn, entry)
+            
+            _print_section("Cycle Complete. Waiting for next environment change...")
             time.sleep(60)  
             
         
