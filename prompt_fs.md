@@ -116,8 +116,8 @@ Goal: Deconstruct the global state into specific domain stressors
     1. w_qos + w_energy + w_fairness = 10
     2. reward = w_qos * QoS - w_energy * Energy + w_fairness * Fairness
         - Energy Efficient against QoS and Fairness
-    2. More pressure required higher w_qos.     
-    3. Less pressure required better energy-efficient and fairness-aware.
+    3. More pressure required higher w_qos.     
+    4. Less pressure required better energy-efficient and fairness-aware.
         - Higher w_qos/w_energy mean less energy-efficient
         - Lower w_fairness mean less fairness-aware      
 - **Weighting plan**:

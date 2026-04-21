@@ -5,6 +5,9 @@ class EnvConfig:
     embb_prob: float
     urllc_prob: float
     mmtc_prob: float
+    walk_prob: float
+    vehicle_prob: float
+    stationary_prob: float
     arrival_rate: float
     departure_rate: float
     
@@ -13,6 +16,9 @@ class EnvConfig:
             'embb_prob': self.embb_prob,
             'urllc_prob': self.urllc_prob,
             'mmtc_prob': self.mmtc_prob,
+            'walk_prob': self.walk_prob,
+            'vehicle_prob': self.vehicle_prob,
+            'stationary_prob': self.stationary_prob,
             'arrival_rate': self.arrival_rate,
             'departure_rate': self.departure_rate
         }

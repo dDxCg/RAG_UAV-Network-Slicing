@@ -2,9 +2,11 @@ from train_mappo import TrainingManagerMAPPO
 import yaml
 from type import EnvConfig, KBEntry
 from kb_handling import add_to_kb, retrieve_candidates
-from llm import suggest_reward_weights
+from llm import generate_response
 from env_sampling import sample_env_config, update_env_config_file
-
+from prompt_builder import build_prompt_fs
+from semantic_analyzer import numerical_analysis
+import time
 class ConfigTracker:
     def __init__(self, env_config_file):
         self.env_config_file = env_config_file
@@ -25,15 +27,18 @@ class ConfigTracker:
             embb_prob=self.env_config['slicing']['slice_probabilities']['embb'],
             urllc_prob=self.env_config['slicing']['slice_probabilities']['urllc'],
             mmtc_prob=self.env_config['slicing']['slice_probabilities']['mmtc'],
+            walk_prob=self.env_config['ue_dynamics']['patterns']['walk']['probability'],
+            vehicle_prob=self.env_config['ue_dynamics']['patterns']['vehicle']['probability'],
+            stationary_prob=self.env_config['ue_dynamics']['patterns']['stationary']['probability'],
             arrival_rate=self.env_config['ue_dynamics']['arrival_rate'],
-            departure_rate=self.env_config['ue_dynamics']['departure_rate'],
+            departure_rate=self.env_config['ue_dynamics']['departure_rate']
         )
         return env_obj
 
-    def _update_reward_weights(self, weights: dict):
-        self.env_config['reward_weights']['qos'] = weights['w_qos']
-        self.env_config['reward_weights']['energy'] = weights['w_energy']
-        self.env_config['reward_weights']['fairness'] = weights['w_fairness']
+    def _update_reward_weights(self, results: dict):
+        self.env_config['reward_weights']['qos'] = results['w_qos']
+        self.env_config['reward_weights']['energy'] = results['w_energy']
+        self.env_config['reward_weights']['fairness'] = results['w_fairness']
         with open(self.env_config_file, 'w', encoding='utf-8') as f:
             yaml.dump(self.env_config, f)
     
@@ -52,13 +57,20 @@ def main():
             print("Environment updated. Retraining with new configuration...")
             config_tracker.env_config = config_tracker._load_env(env_config_file)
             env_obj = config_tracker._extract_env_obj()
+            env_list = env_obj.__to_dict__()
+            print(f"Current Environment: {env_list}")
 
             # TODO: LLM-Guided reward weights
-            selected_exps = retrieve_candidates(env_obj)
-            suggested_weights = suggest_reward_weights(env_obj, selected_exps)
+            env = numerical_analysis(env_list)
+            # selected_exps = retrieve_candidates(env_obj)
+            prompt = build_prompt_fs(env)
+            print("LLM Analyzing...")
+            start_time = time.time()
+            results = generate_response(prompt)
+            print(f"LLM finished in {time.time() - start_time:.2f} seconds.\n{results}")
             
             # TODO: Update reward weights
-            config_tracker._update_reward_weights(suggested_weights)
+            config_tracker._update_reward_weights(results)
             config_tracker.env_config = config_tracker._load_env(env_config_file)
 
             trainer = TrainingManagerMAPPO(
@@ -67,21 +79,22 @@ def main():
                 checkpoint_path=checkpoint_file
             )
 
-            reward = trainer.train()
-
-            # TODO: semantic analyze 
-            semantic_thinking = "Placeholder"
+            # reward = trainer.train()
 
             # Update knowledge base
-            kb_entry = KBEntry(
-                env_config = env_obj,
-                w_qos = config_tracker.env_config['reward_weights']['qos'],
-                w_energy = config_tracker.env_config['reward_weights']['energy'],
-                w_fairness = config_tracker.env_config['reward_weights']['fairness'],
-                reward = round(float(reward), 2) if reward is not None else -1e9,
-                thinking = semantic_thinking  
-            )
-            add_to_kb(kb_entry)
+            print("Updating knowledge base...")
+            # kb_entry = KBEntry(
+            #     env_config = env_obj,
+            #     w_qos = config_tracker.env_config['reward_weights']['qos'],
+            #     w_energy = config_tracker.env_config['reward_weights']['energy'],
+            #     w_fairness = config_tracker.env_config['reward_weights']['fairness'],
+            #     reward = round(float(reward), 2) if reward is not None else -1e9,
+            #     thinking = results['thinking']
+            # )
+            # add_to_kb(kb_entry)
+
+            print("Cycle complete. Waiting for next environment change...")
+            time.sleep(60)  
             
         
 if __name__ == "__main__":

@@ -12,7 +12,27 @@ You are a Network Optimization Tool. Your mission is analyze network environment
     - Mobility velocity: vehicle >> walk > stationary. Vehicle requires more energy to serve, while walk and stationary require less.
     - UE Dynamic: Faster change in UE number required more energy, while stable number of UE prior energy efficient. 
 ## EXAMPLES
-**Most related examples**: {{examples}}
+{% for item in examples %}
+**EXAMPLE {{ loop.index }}:** 
+- **Environment**:
+    - **slice_probabilities**: (eMBB: {{ item.embb_prob }}, URLLC: {{ item.urllc_prob }}, mMTC: {{ item.mmtc_prob }})
+    - **mobility_probabilities**: (walk: {{ item.walk_prob }}, vehicle: {{ item.vehicle_prob }}, stationary: {{ item.stationary_prob }})
+    - **ue_dynamic_rate**: (Arrival rate: {{ item.arrival_rate }}, Departure rate: {{ item.departure_rate }})
+- **Environment Analysis**: 
+    - **pressure**: {{ item.pressure }}
+        - **slice_stress**: {{ item.slice_stress }}
+        - **mobility_stress**: {{ item.mobility_stress }}
+        - **dynamic_stress**: {{ item.dynamic_stress }}
+    - **jain fairness**: {{ item.jain }}
+        - **slice jain**: {{ item.jain_s }}
+        - **mobility jain**: {{ item.jain_m }}
+- **Result**:
+    - **weights**: (w_qos: {{ item.w_qos }}, w_energy: {{ item.w_energy }}, w_fairness: {{ item.w_fairness }})
+    - **reward**: {{ item.reward }}
+    - **energy_penalty**: {{ item.energy_penalty }}, **fairness_penalty**: {{ item.fairness_penalty }}
+    - **score**: {{ item.score }}
+- **Thinking**: {{item.thinking}}
+{% endfor %}
 ## THINKING
 **PHASE 1: Overall Observation**
 Goal: Identify the high-level mode of the network.
@@ -63,8 +83,8 @@ Goal: Deconstruct the global state into specific domain stressors
     1. w_qos + w_energy + w_fairness = 10
     2. reward = w_qos * QoS - w_energy * Energy + w_fairness * Fairness
         - Energy Efficient against QoS and Fairness
-    2. More pressure required higher w_qos.     
-    3. Less pressure required better energy-efficient and fairness-aware.
+    3. More pressure required higher w_qos.     
+    4. Less pressure required better energy-efficient and fairness-aware.
         - Higher w_qos/w_energy mean less energy-efficient
         - Lower w_fairness mean less fairness-aware      
 - **Weighting plan**:
