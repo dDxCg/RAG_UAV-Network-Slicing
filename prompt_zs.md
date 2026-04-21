@@ -66,8 +66,7 @@ Goal: Deconstruct the global state into specific domain stressors
     2. More pressure required higher w_qos.     
     3. Less pressure required better energy-efficient and fairness-aware.
         - Higher w_qos/w_energy mean less energy-efficient
-        - Lower w_fairness mean less fairness-aware   
-    4. w_qos >= 5 in most case to maintain enough QoS   
+        - Lower w_fairness mean less fairness-aware    
 - **Weighting plan**:
     - Step 1: Overall observe environment (**PHASE 1**)
     - Step 2: Detailed Analyze (**PHASE 2**)

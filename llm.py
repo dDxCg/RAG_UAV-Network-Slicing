@@ -32,17 +32,15 @@ def _clean_response(text):
 
 
 if __name__ == "__main__":
-    from prompt_builder import build_prompt_zs
+    from prompt_builder import build_prompt_zs, build_prompt_fs
     
-    env = {"arrival_rate": 2.5, "departure_rate": 2.5, 
-           "walk_prob": 0.33, "vehicle_prob": 0.33, "staionary_prob": 0.34, 
-           "embb_prob": 0.33, "urllc_prob": 0.33, "mmtc_prob": 0.34, 
-           "qos_demand": 0.332, 
-           "dynamic_ratio": 1.0, "dynamic_stress": 0.1655,  
-           "m_stress": 0.331, 
-           "raw_pressure": 0.4975, "pressure": 0.0002, 
-           "raw_jain": 0.7599, "jain": 0.9998, "jain_m": 0.6203, "jain_s": 0.9308}
-    prompt = build_prompt_zs(env)
+    env = {"arrival_rate": 4.5, "departure_rate": 0.5, 
+           "walk_prob": 0.45, "vehicle_prob": 0.3, "staionary_prob": 0.25,
+            "embb_prob": 0.05, "urllc_prob": 0.05, "mmtc_prob": 0.9, 
+            "qos_demand": 0.22, "m_stress": 0.325, "dynamic_stress": 0.2925,
+            "pressure": 0.0005, 
+            "raw_jain": 0.5691, "jain_m": 0.6665, "jain_s": 0.4859, "jain": 0.0}
+    prompt = build_prompt_fs(env)
     res = generate_response(prompt)
     print(res)
     print(type(res))

@@ -5,6 +5,11 @@ def build_prompt_zs(env: dict):
     template = jinja_env.get_template('prompt_zs.md')
     return template.render(env)
 
+def build_prompt_fs(env: dict):
+    jinja_env = Environment(loader=FileSystemLoader('.'))
+    template = jinja_env.get_template('prompt_fs.md')
+    return template.render(env)
+
 if __name__ == "__main__":
     env = {"arrival_rate": 2.5, "departure_rate": 2.5, 
            "walk_prob": 0.33, "vehicle_prob": 0.33, "staionary_prob": 0.34, 
