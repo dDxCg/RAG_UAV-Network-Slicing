@@ -68,7 +68,7 @@ def _save_log(log: dict, filepath):
 def _build_save_path(mode, eval_samples, seed):
     stamp = time.strftime("%Y%m%d")
     if eval_samples > 0:
-        return f"logs/{mode}_{eval_samples}_{seed}_{stamp}.jsonl"
+        return f"logs/{mode}_{eval_samples}_{seed}.jsonl"
     else:
         return f"logs/{mode}_{seed}_{stamp}.jsonl"
 
@@ -125,7 +125,6 @@ def main():
         print(f"Sampled {len(eval_envs)} evaluation environments:\n{eval_envs}")
 
     # Database connection for KB mode
-    conn = connect_db()
 
     # Main loop 
     while True:
@@ -161,6 +160,7 @@ def main():
                 elif args.mode == "fs":
                     prompt = build_prompt_fs(env)
                 elif args.mode == "kb":
+                    conn = connect_db()
                     selected_exps = query_similar_entries(conn, EnvVector(env), EvalVector(env), top_k=3)
                     print(f"Retrieved {len(selected_exps)} similar experiences from KB for LLM analysis:\n{selected_exps}")
                     prompt = build_prompt_kb(env, selected_exps)
@@ -212,6 +212,7 @@ def main():
                 _print_section("Updating Knowledge Base")
                 entry = KBEntry(log)
                 print(f"Updating knowledge base: {entry}")
+                conn = connect_db()
                 append_entry(conn, entry)
 
             
