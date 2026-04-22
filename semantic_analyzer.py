@@ -95,3 +95,28 @@ def numerical_analysis(env_config: dict):
         "pressure": round(pressure_calibrated, 4),
         "jain": round(jain_calibrated, 4)
     }
+
+def _get_env_penalty(env_config, w_qos, w_energy, w_fairness):
+    pref = _calculate_preference(env_config)
+    raw_pressure = pref['raw_pressure']
+    pressure = _calculate_pressure_calibrated(raw_pressure)
+
+    jain_pref = _calculate_jain_demand(env_config)
+    raw_jain = jain_pref["raw_jain"]
+    jain = _calculate_jain_calibrated(raw_jain)
+
+    ratio_factor = w_qos / (w_energy + 1e-6)
+    # Higher pressure, lower energy penalty ~ Harder env, allow more energy usage
+    energy_penalty = ratio_factor * (1 - pressure)
+
+    # Raw Jain [0,1]: 1 is totally fair
+    # --> (1 - jain) Less jain = More penalty
+    # --> (1 - pressure) More stable - more aware to fairness
+    fairness_penalty = (1 / (w_fairness + 1e-6)) * (1 - pressure) * (1 - jain)
+
+    penalty = fairness_penalty + energy_penalty
+    return {
+        "env_penalty": round(penalty, 4),
+        "energy_penalty": round(energy_penalty, 4),
+        "fairness_penalty": round(fairness_penalty, 4)
+    }

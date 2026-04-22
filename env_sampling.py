@@ -4,11 +4,12 @@ import yaml
 from type import EnvConfig
 
 
-def sample_env_config():
-    p = np.random.dirichlet([1, 1, 1]).tolist()
-    q = np.random.dirichlet([1, 1, 1]).tolist()
-    a = float(np.random.uniform(0.1, 5.0))
-    d = float(np.random.uniform(0.1, a))
+def sample_env_config(rng=None):
+    rng = rng or np.random.default_rng()
+    p = rng.dirichlet([1, 1, 1]).tolist()
+    q = rng.dirichlet([1, 1, 1]).tolist()
+    a = float(rng.uniform(0.1, 5.0))
+    d = float(rng.uniform(0.1, a))
 
     return EnvConfig(
         embb_prob=q[0],
@@ -38,8 +39,16 @@ def update_env_config_file(env_config: EnvConfig, file_path: str):
         yaml.dump(env_dict, f)
     return 
 
+def sample_env_eval(seed, n_samples=10):
+    rng = np.random.default_rng(seed)
+    eval_envs = []
+    for _ in range(n_samples):
+        env_config = sample_env_config(rng)
+        eval_envs.append(env_config)
+    return eval_envs
+
+
 if __name__ == "__main__":
-    for _ in range(5):
-        config = sample_env_config()
-        update_env_config_file(config, "config/environment/adaptive.yaml")
-        print(config)
+    run_1 = sample_env_eval(42)
+    run_2 = sample_env_eval(42)
+    print (run_1.pop()) 

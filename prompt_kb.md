@@ -20,8 +20,8 @@ You are a Network Optimization Tool. Your mission is analyze network environment
     - **ue_dynamic_rate**: (Arrival rate: {{ item.arrival_rate }}, Departure rate: {{ item.departure_rate }})
 - **Environment Analysis**: 
     - **pressure**: {{ item.pressure }}
-        - **slice_stress**: {{ item.slice_stress }}
-        - **mobility_stress**: {{ item.mobility_stress }}
+        - **slice_stress**: {{ item.qos_demand }}
+        - **mobility_stress**: {{ item.m_stress }}
         - **dynamic_stress**: {{ item.dynamic_stress }}
     - **jain fairness**: {{ item.jain }}
         - **slice jain**: {{ item.jain_s }}
