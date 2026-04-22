@@ -4,6 +4,8 @@ numba==0.62.1
 numpy==2.4.4
 openai==2.32.0
 pandas==3.0.2
+pgvector==0.4.2
+psycopg==3.3.3
 PyOpenGL==3.1.10
 python-dotenv==1.2.2
 PyYAML==6.0.3
