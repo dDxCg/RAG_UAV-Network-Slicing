@@ -2,5 +2,7 @@ kb_log.db
 kb_log.db-journal
 saved_models
 trial_logs
+logs
 __pycache__
 .env
+.venv

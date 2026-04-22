@@ -236,7 +236,6 @@ class TrainingManagerMAPPO:
         last_plot_step = 0
 
         #Local list to track rewards
-        reward_log = []
 
         while global_step < self.config['total_training_steps']:
             # ============================================
@@ -276,7 +275,6 @@ class TrainingManagerMAPPO:
                 
                 # Store environment metrics
                 self._store_step_metrics(global_step, actions, reward, info)
-                reward_log.append(reward)
                 
                 # Update visualization if enabled
                 # if self.enable_visualization and self.visualizer is not None:
@@ -349,8 +347,36 @@ class TrainingManagerMAPPO:
         self._save_metrics_to_csv()
         self._plot_training_progress(global_step)
 
-        avg_reward = np.mean(reward_log[-min(len(reward_log), self.MAPPOagent.n_steps * 5):])
-        return avg_reward
+        return self._final_report()
+
+    def _final_report(self):
+        import pandas as pd
+        import os
+        step_metrics_path = f'{self.model_dir}/step_metrics.csv'
+        if not os.path.exists(step_metrics_path):
+            print(f"Warning: {step_metrics_path} not found")
+            return {
+                "reward": -1e6,
+                "qos": -1e6,
+                "energy_usage": -1e6,
+                "fairness": -1e6
+            }
+
+        step_df = pd.read_csv(step_metrics_path)
+        steps = step_df['steps'].values
+
+        reward = step_df['rewards'].tail(1000).mean()
+        qos = step_df['qos_satisfaction'].tail(1000).mean()
+        energy = step_df['energy_usage_level'].tail(1000).mean()
+        fairness = step_df['fairness_level'].tail(1000).mean()
+
+        return {
+            "reward": reward,
+            "qos": qos,
+            "energy_usage": energy,
+            "fairness": fairness
+        }
+        
 
     def _store_step_metrics(self, step, actions, reward, info):
         """Store metrics for this step"""

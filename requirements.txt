@@ -1,9 +1,9 @@
 Jinja2==3.1.6
-matplotlib==3.10.8
+matplotlib==3.10.7
 numba==0.62.1
-numpy==2.4.4
+numpy==2.2.6
 openai==2.32.0
-pandas==3.0.2
+pandas==2.3.3
 pgvector==0.4.2
 psycopg==3.3.3
 PyOpenGL==3.1.10

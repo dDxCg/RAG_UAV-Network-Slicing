@@ -65,15 +65,15 @@ def _save_log(log: dict, filepath):
     with open(filepath, 'a', encoding='utf-8') as f:
         f.write(json.dumps(log, ensure_ascii=False) + "\n")
 
-def _build_save_path(mode, eval_samples):
-    stamp = time.strftime("%Y%m%d-%H%M%S")
+def _build_save_path(mode, eval_samples, seed):
+    stamp = time.strftime("%Y%m%d")
     if eval_samples > 0:
-        return f"logs/eval_{eval_samples}_{mode}_{stamp}.jsonl"
+        return f"logs/{mode}_{eval_samples}_{seed}_{stamp}.jsonl"
     else:
-        return f"logs/train_{mode}_{stamp}.jsonl"
+        return f"logs/{mode}_{seed}_{stamp}.jsonl"
 
 # Report selected mode
-def _report_args(mode, eval_samples):
+def _report_args(mode, eval_samples, seed):
     mode_desc = {
         "zs": "Zero-Shot Prompting",
         "fs": "Few-Shot Prompting with Static Examples",
@@ -85,6 +85,7 @@ def _report_args(mode, eval_samples):
         print(f"Evaluation mode enabled: Running {eval_samples} samples")
     else:
         print("Evaluation mode disabled: Running indefinitely until manually stopped")
+    print(f"Random Seed: {seed}")
 
 def main():
     parser = argparse.ArgumentParser()
@@ -100,8 +101,14 @@ def main():
         default=0,
         help="Run only N samples for evaluation"
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducibility"
+    )
     args = parser.parse_args()
-    _report_args(args.mode, args.eval)
+    _report_args(args.mode, args.eval, args.seed)
 
     # Configs
     train_config_file = 'config/train/mappo_default.yaml'  
@@ -114,8 +121,8 @@ def main():
     eval_envs = []
     if args.eval > 0:
         _print_section(f"Sampling {args.eval} samples")
-        eval_envs = sample_env_eval(seed=42, n_samples=args.eval)
-        print(f"Sampled {len(eval_envs)} evaluation environments.")
+        eval_envs = sample_env_eval(seed=args.seed, n_samples=args.eval)
+        print(f"Sampled {len(eval_envs)} evaluation environments:\n{eval_envs}")
 
     # Database connection for KB mode
     conn = connect_db()
@@ -123,8 +130,11 @@ def main():
     # Main loop 
     while True:
         env_config = None
-        if eval_envs:
-            env_config = eval_envs.pop(0)
+        if args.eval > 0:
+            if eval_envs:
+                env_config = eval_envs.pop(0)
+            else:
+                break
         else: 
             env_config = sample_env_config()
         
@@ -140,6 +150,7 @@ def main():
             env_list = env_obj.__to_dict__()
             print(f"Current Environment: {env_list}")
 
+            env = env_list
             if args.mode != "none":
                 _print_section("Semantic Analysis & KB Retrieval")
                 env = numerical_analysis(env_list)
@@ -168,21 +179,32 @@ def main():
                 train_config_path=train_config_file,
                 checkpoint_path=None
             )
-            reward = trainer.train()
+            report = trainer.train()
+            reward = report["reward"]
+
             weights = config_tracker._get_weights()
-            penalty = _get_env_penalty(config_tracker.env_config, **weights)
-            score = reward - penalty
+            penalty = _get_env_penalty(env_list, **weights)
+            score = reward - penalty["env_penalty"]
+            
             log = {
                 **env,
-                **llm_res,
+                **report,
                 **penalty,
-                "reward": reward,
                 "score": score
             }
+            if args.mode != "none":
+                log = {
+                    **env,
+                    **llm_res,
+                    **report,
+                    **penalty,
+                    "score": score
+                }
+            print(f"{log}")
 
             # Save log
             _print_section("Saving Log")
-            save_path = _build_save_path(args.mode, args.eval)
+            save_path = _build_save_path(args.mode, args.eval, args.seed)
             _save_log(log, save_path)
 
             # Update knowledge base
@@ -194,7 +216,7 @@ def main():
 
             
             _print_section(f"Cycle Complete. Waiting for next environment change...")
-            time.sleep(60)  
+            # time.sleep(10)  
             
         
 if __name__ == "__main__":

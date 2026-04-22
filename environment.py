@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from numba import jit, prange
 from collections import defaultdict
 
-global_env_config = Configuration("config/environment/adaptive.yaml")
+global_env_config = Configuration("config/environment/global.yaml")
 global_beam_angle = global_env_config.uav_params['beam_angle']
 a = global_env_config.a2g['a']
 b = global_env_config.a2g['b']
@@ -1786,14 +1786,7 @@ class NetworkSlicingEnv:
         # ============================================
         qos_reward, breakdown_qos = self._calculate_qos_reward()
         energy_penalty = self._calculate_energy_consumption_penalty()
-        fairness_reward = self._calculate_fairness_index()
-        
-        # ============================================
-        # Sigmoid to reduce QoS signal
-        # ============================================ 
-        checkpoint = 0.6
-        steepness = 10
-        qos_reward = 1 / (1 + np.exp(-steepness * (qos_reward - checkpoint)))
+        fairness_reward = self._calculate_fairness_index()        
 
         # ============================================
         # Combine with weights
