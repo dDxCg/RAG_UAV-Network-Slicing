@@ -17,8 +17,18 @@ def connect_db():
     register_vector(conn)
     return conn
 
+def ping_timeout(conn):
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1;")
+    except psycopg.OperationalError as e:
+        print(f"[ERROR] Database connection lost: {e}")
+        return connect_db()
+    return conn
+
 def test_db():
     conn = connect_db()
+    conn = ping_timeout(conn)
     with conn.cursor() as cur:
         cur.execute("SELECT 1;")
         print(cur.fetchone())

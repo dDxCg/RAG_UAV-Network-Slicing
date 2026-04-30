@@ -32,15 +32,18 @@ def _clean_response(text):
 
 
 if __name__ == "__main__":
-    from prompt_builder import build_prompt_zs, build_prompt_fs
-    
+    from prompt_builder import build_prompt_kb
+    from semantic_analyzer import _get_env_pref
+    from kb_handler import query_similar_entries
+    from db_config import connect_db
+    from type import EnvVector, EvalVector
+    conn = connect_db()
     env = {"arrival_rate": 4.5, "departure_rate": 0.5, 
-           "walk_prob": 0.45, "vehicle_prob": 0.3, "staionary_prob": 0.25,
-            "embb_prob": 0.05, "urllc_prob": 0.05, "mmtc_prob": 0.9, 
-            "qos_demand": 0.22, "m_stress": 0.325, "dynamic_stress": 0.2925,
-            "pressure": 0.0005, 
-            "raw_jain": 0.5691, "jain_m": 0.6665, "jain_s": 0.4859, "jain": 0.0}
-    prompt = build_prompt_fs(env)
+           "walk_prob": 0.45, "vehicle_prob": 0.3, "stationary_prob": 0.25,
+            "embb_prob": 0.05, "urllc_prob": 0.05, "mmtc_prob": 0.9}
+    env = _get_env_pref(env)
+    examples = query_similar_entries(conn, EnvVector(env), EvalVector(env), top_k=5)
+    prompt = build_prompt_kb(env, examples)
     res = generate_response(prompt)
     print(res)
     print(type(res))

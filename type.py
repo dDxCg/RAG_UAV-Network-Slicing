@@ -12,7 +12,7 @@ class EnvConfig:
     arrival_rate: float
     departure_rate: float
     
-    def __to_dict__(self):
+    def __dict__(self):
         return {
             'embb_prob': self.embb_prob,
             'urllc_prob': self.urllc_prob,
@@ -45,7 +45,7 @@ class EnvVector:
         self.arrival_rate = env['arrival_rate']
         self.departure_rate = env['departure_rate']
 
-    def __to_pg_vector__(self):
+    def __pgvector__(self):
         vec = list(asdict(self).values())
         return '[' + ','.join(str(float(x)) for x in vec) + ']'
 @dataclass
@@ -54,20 +54,14 @@ class EvalVector:
     slice_pressure: float
     mobility_pressure: float
     dynamic_pressure: float
-    jain: float
-    slice_jain: float
-    mobility_jain: float
 
     def __init__(self, eval: dict):
         self.pressure = eval['pressure']
         self.slice_pressure = eval['qos_demand']
         self.mobility_pressure = eval['m_stress']
         self.dynamic_pressure = eval['dynamic_stress']
-        self.jain = eval['jain']
-        self.slice_jain = eval['jain_s']
-        self.mobility_jain = eval['jain_m']
 
-    def __to_pg_vector__(self):
+    def __pgvector__(self):
         vec = list(asdict(self).values())
         return '[' + ','.join(str(float(x)) for x in vec) + ']'
 
@@ -82,7 +76,7 @@ class WeightVector:
         self.w_energy = log['w_energy']
         self.w_fairness = log['w_fairness']
 
-    def __to_pg_vector__(self):
+    def __pgvector__(self):
         vec = list(asdict(self).values())
         return '[' + ','.join(str(float(x)) for x in vec) + ']'
 
@@ -99,11 +93,11 @@ class KBEntry:
         self.weight_vector = WeightVector(log)
         self.metadata = Json(log)
 
-    def __to_dict__(self):
+    def __dict__(self):
         return {
-            'env_vector': self.env_vector.__to_dict__(),
-            'eval_vector': self.eval_vector.__to_dict__(),
-            'weight_vector': self.weight_vector.__to_dict__(),
+            'env_vector': self.env_vector.__pgvector__(),
+            'eval_vector': self.eval_vector.__pgvector__(),
+            'weight_vector': self.weight_vector.__pgvector__(),
             'metadata': self.metadata
         }
 
@@ -119,5 +113,5 @@ if __name__ == "__main__":
         "thinking": "URLLC dominant slice requires maximum QoS. Minimal stress and high fairness allow for aggressive w_qos weighting with low energy/fairness overhead."
     }
     entry = KBEntry(log)
-    print(entry)
+    print(entry.__dict__())
 

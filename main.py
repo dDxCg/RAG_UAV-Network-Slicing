@@ -13,7 +13,7 @@ from kb_handler import append_entry, query_similar_entries
 from llm import generate_response
 from env_sampling import sample_env_config, update_env_config_file, sample_env_eval
 from prompt_builder import build_prompt_fs, build_prompt_kb, build_prompt_zs
-from semantic_analyzer import numerical_analysis, _get_env_penalty
+from semantic_analyzer import _get_env_pref
 
 class ConfigTracker:
     def __init__(self, env_config_file):
@@ -146,13 +146,13 @@ def main():
             _print_section("Environment Change Detected")
             config_tracker.env_config = config_tracker._load_env(env_config_file)
             env_obj = config_tracker._extract_env_obj()
-            env_list = env_obj.__to_dict__()
+            env_list = env_obj.__dict__()
             print(f"Current Environment: {env_list}")
 
             env = env_list
             if args.mode != "none":
                 _print_section("Semantic Analysis & KB Retrieval")
-                env = numerical_analysis(env_list)
+                env = _get_env_pref(env_list)
                 
                 prompt = ""
                 if args.mode == "zs":
@@ -183,13 +183,11 @@ def main():
             reward = report["reward"]
 
             weights = config_tracker._get_weights()
-            penalty = _get_env_penalty(env_list, **weights)
-            score = reward - penalty["env_penalty"]
+            score = report["qos"] - report["energy_usage"] + report["fairness"]
             
             log = {
                 **env,
                 **report,
-                **penalty,
                 "score": score
             }
             if args.mode != "none":
@@ -197,7 +195,6 @@ def main():
                     **env,
                     **llm_res,
                     **report,
-                    **penalty,
                     "score": score
                 }
             print(f"{log}")

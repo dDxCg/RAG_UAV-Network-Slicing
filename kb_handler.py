@@ -8,8 +8,8 @@ def append_entry(conn, entry: KBEntry):
         _add_entry(conn, entry)
 
 def query_similar_entries(conn, env_vector: EnvVector, eval_vector: EvalVector, top_k=3):
-    env_vector = env_vector.__to_pg_vector__()
-    eval_vector = eval_vector.__to_pg_vector__()
+    env_vector = env_vector.__pgvector__()
+    eval_vector = eval_vector.__pgvector__()
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -26,8 +26,8 @@ def query_similar_entries(conn, env_vector: EnvVector, eval_vector: EvalVector, 
     return [result[0] for result in results]
 
 def _find_existed_row(conn, entry: KBEntry):
-    env_vector = entry.env_vector.__to_pg_vector__()
-    weight_vector = entry.weight_vector.__to_pg_vector__()
+    env_vector = entry.env_vector.__pgvector__()
+    weight_vector = entry.weight_vector.__pgvector__()
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -55,9 +55,9 @@ def _update_metadata(conn, id, entry: KBEntry):
         conn.commit()
 
 def _add_entry(conn, entry: KBEntry):
-    env_vector = entry.env_vector.__to_pg_vector__()
-    eval_vector = entry.eval_vector.__to_pg_vector__()
-    weight_vector = entry.weight_vector.__to_pg_vector__()
+    env_vector = entry.env_vector.__pgvector__()
+    eval_vector = entry.eval_vector.__pgvector__()
+    weight_vector = entry.weight_vector.__pgvector__()
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -77,8 +77,8 @@ if __name__ == "__main__":
         "embb_prob": 0.33, "urllc_prob": 0.33, "mmtc_prob": 0.34,
         "walk_prob": 0.33, "vehicle_prob": 0.33, "stationary_prob": 0.34,
         "arrival_rate": 2.5, "departure_rate": 2.5,
-        "pressure": 0.0002, "qos_demand": 0.332, "m_stress": 0.331, "dynamic_stress": 0.1655,
-        "jain": 0.9998, "jain_s": 0.9308, "jain_m": 0.6203
+        "pressure": 0.0002, "qos_demand": 0.332, "m_stress": 0.331, "dynamic_stress": 0.1655
     }
-    selected_exps = query_similar_entries(conn, EnvVector(env), EvalVector(env), top_k=3)
-    print(selected_exps)
+    selected_exps = query_similar_entries(conn, EnvVector(env), EvalVector(env), top_k=5)
+    for exp in selected_exps:
+        print(f"{exp}\n")
