@@ -5,10 +5,10 @@ import json
 def merge_jsonl(input_dir="logs"):
     input_path = Path(input_dir)
 
-    kb_files = sorted(input_path.glob("kb*.jsonl"))
-    none_files = sorted(input_path.glob("none*.jsonl"))
-    zs_files = sorted(input_path.glob("zs_*.jsonl"))
-    fs_files = sorted(input_path.glob("fs_*.jsonl"))
+    kb_files = sorted(input_path.glob("kb_*.jsonl"), reverse=True)
+    none_files = sorted(input_path.glob("none_*.jsonl"), reverse=True)
+    zs_files = sorted(input_path.glob("zs_*.jsonl"), reverse=True)
+    fs_files = sorted(input_path.glob("fs_*.jsonl"), reverse=True)
 
     def merge(files, output_file):
         with open(output_file, "w", encoding="utf-8") as outfile:
@@ -61,8 +61,9 @@ def plot_and_save(folder="logs", output_dir="logs"):
 
     metrics = ["qos", "energy_usage", "fairness", "score", "reward"]
 
-    # ---- Combined subplot ----
-    fig, axes = plt.subplots(5, 1, figsize=(10, 16), sharex=True)
+    # ---- Grid subplot (2 rows, 3 columns) ----
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10)) 
+    axes = axes.flatten()  
 
     for i, metric in enumerate(metrics):
         ax = axes[i]
@@ -71,29 +72,30 @@ def plot_and_save(folder="logs", output_dir="logs"):
             x = range(len(y))
             ax.plot(x, y, label=name)
 
-        ax.set_title(metric)
-        ax.set_ylabel(metric)
-        ax.legend()
+        ax.set_title(metric.replace("_", " ").title(), fontsize=12, fontweight='bold')
+        ax.set_ylabel(f"{metric.replace('_', ' ').title()}")
+        ax.set_xlabel("Steps") 
+        ax.legend(fontsize='small')
+        ax.grid(True, linestyle='--', alpha=0.6)
 
-    axes[-1].set_xlabel("Step")
+    if len(metrics) < len(axes):
+        axes[-1].axis('off')
+
     plt.tight_layout()
-
-    combined_path = output_dir / "comparison_all_metrics.png"
+    
+    combined_path = output_dir / "comparison_grid.png"
     plt.savefig(combined_path)
     plt.close()
+    print(f"Saved grid plot: {combined_path}")
 
-    print(f"Saved: {combined_path}")
-
-    # ---- Optional: individual plots ----
     for metric in metrics:
         plt.figure()
         for name, data in all_data.items():
             y = data[metric]
-            x = range(len(y))
-            plt.plot(x, y, label=name)
+            plt.plot(range(len(y)), y, label=name)
 
         plt.title(metric)
-        plt.xlabel("Step")
+        plt.xlabel("Steps")
         plt.ylabel(metric)
         plt.legend()
         plt.tight_layout()
@@ -101,10 +103,11 @@ def plot_and_save(folder="logs", output_dir="logs"):
         path = output_dir / f"{metric}.png"
         plt.savefig(path)
         plt.close()
-
         print(f"Saved: {path}")
 
 
 if __name__ == "__main__":
+    import time
     merge_jsonl()
-    plot_and_save()
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    plot_and_save(output_dir=f"logs/plots_{stamp}")
