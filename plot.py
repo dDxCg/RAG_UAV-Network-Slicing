@@ -2,6 +2,8 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import json
 
+from matplotlib.ticker import MaxNLocator
+
 def merge_jsonl(input_dir="logs"):
     input_path = Path(input_dir)
 
@@ -75,6 +77,10 @@ def plot_and_save(folder="logs", output_dir="logs"):
         ax.set_title(metric.replace("_", " ").title(), fontsize=12, fontweight='bold')
         ax.set_ylabel(f"{metric.replace('_', ' ').title()}")
         ax.set_xlabel("Steps") 
+
+        # Force the x-axis to only use integers
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        
         ax.legend(fontsize='small')
         ax.grid(True, linestyle='--', alpha=0.6)
 
@@ -97,6 +103,10 @@ def plot_and_save(folder="logs", output_dir="logs"):
         plt.title(metric)
         plt.xlabel("Steps")
         plt.ylabel(metric)
+
+        # Force the x-axis to only use integers
+        plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
+
         plt.legend()
         plt.tight_layout()
 
@@ -110,4 +120,4 @@ if __name__ == "__main__":
     import time
     merge_jsonl()
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    plot_and_save(output_dir=f"logs/plots_{stamp}")
+    plot_and_save(output_dir=f"plots_{stamp}")
