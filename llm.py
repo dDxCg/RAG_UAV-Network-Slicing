@@ -22,7 +22,14 @@ def generate_response(prompt):
         ],
     )
     res =  response.choices[0].message.content
-    return _clean_response(res)
+    cleaned_output = _clean_response(res)
+    
+    if isinstance(cleaned_output, dict):
+        return cleaned_output
+    else:
+        return generate_response(prompt)
+    
+    return
 
 def _clean_response(text):
     match = re.search(r'\{.*\}', text, re.DOTALL)
