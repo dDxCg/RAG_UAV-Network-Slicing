@@ -57,6 +57,40 @@ class ConfigTracker:
             "w_fairness": self.env_config['reward_weights']['fairness']
         }
     
+
+class HumanInLoop:
+    def __init__(self):
+        self.mode = self.select_mode()
+
+    def select_mode(self):
+        mode = input("Select mode:\n   1: auto\n   2: hybrid \nSelection:")
+        if mode not in ["1", "2"]:
+            print("Invalid selection. Please try again.")
+            return self.select_mode()
+        return mode
+
+    def verify_llm(self):
+        user_feedback = input("LLM's analysis verify options:\n 1: Proceed with training\n  2: Re-run LLM analysis\n  3: Feedback to LLM\n Selection:")
+        
+        if self.mode == 2:
+            if user_feedback not in ["1", "2", "3"]:
+                print("Invalid selection. Please try again.")
+                return self.verify_llm()
+            return user_feedback
+    
+        return None
+    
+    def control_kb(self):
+        kb_option = input("Knowledge Base options:\n 1: Add new entry to KB\n 2: No changes to KB\n Selection:")
+        
+        if self.mode == 2:
+            if kb_option not in ["1", "2"]:
+                print("Invalid selection. Please try again.")
+                return self.control_kb()
+            return kb_option
+
+        return None
+
 def _print_section(title):
     print("\n" + f" {title} ".center(100, "=") + "\n")
 
@@ -110,6 +144,9 @@ def main():
     args = parser.parse_args()
     _report_args(args.mode, args.eval, args.seed)
 
+
+    human_controller = HumanInLoop()
+
     # Configs
     train_config_file = 'config/train/mappo_default.yaml'  
     env_config_file = "config/environment/adaptive.yaml"
@@ -124,7 +161,6 @@ def main():
         eval_envs = sample_env_eval(seed=args.seed, n_samples=args.eval)
         print(f"Sampled {len(eval_envs)} evaluation environments:\n{eval_envs}")
 
-    # Database connection for KB mode
 
     # Main loop 
     while True:
@@ -169,6 +205,8 @@ def main():
                 start_time = time.time()
                 llm_res = generate_response(prompt)
                 print(f"LLM finished in {time.time() - start_time:.2f} seconds.\n{llm_res}")
+
+                human_controller.verify_llm()
                 
                 config_tracker._update_reward_weights(llm_res)
                 config_tracker.env_config = config_tracker._load_env(env_config_file)
@@ -208,7 +246,10 @@ def main():
             if args.mode == "kb":
                 _print_section("Updating Knowledge Base")
                 entry = KBEntry(log)
+                
                 print(f"Updating knowledge base: {entry}")
+                human_controller.control_kb()
+
                 conn = connect_db()
                 append_entry(conn, entry)
 
