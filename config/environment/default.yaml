@@ -1,148 +1,121 @@
-# ENVIRONMENT CONFIGURATION FOR UAV NETWORK SIMULATION
-# ----------------------------------------------------
-
-# Physical entities parameters
-system:
-    num_uavs: 3 
-    num_ues: 200
-    service_area: [2000, 2000] # [width, height] in meters
-    uav_fly_range_x: [0, 2000] # [min, max] radius from center in meters
-    uav_fly_range_y: [0, 2000] # [min, max] radius from center in meters
-    uav_fly_range_h: [100, 400] # [min, max] height in m  eters
-    num_das_per_slice: 3
-
-# Time parameters
-time:
-    T_L: 60.0 # Long-term period (seconds) 
-    T_S: 0.01 # Short-term period (seconds)
-
-# Channel and propagation parameters
-channel:
-    noise_power: 1e-13 # Watts
-    carrier_frequency: 2.0e9 # Hz
-    rb_bandwidth: 360e3 # Hz
-    total_bandwidth: 600e6 # Hz per UAV
-
-packet_rates:
-    embb: 50    # packets/second per UE
-    urllc: 100  # packets/second per UE
-    mmtc: 1     # packets/second per UE
-
-# Quality of Service profiles for network slices
-qos_profiles:
-    embb: # Enhanced Mobile Broadband (slice_type: 1)
-        min_rate: 100e6 # bps
-        max_latency: 10.0 # ms
-        min_reliability: 0.99
-    urllc: # Ultra-Reliable Low-Latency Communications (slice_type: 2)
-        min_rate: 10e6
-        max_latency: 1.0
-        min_reliability: 0.9999
-    mmtc: # Massive Machine-Type Communications (slice_type: 3)
-        min_rate: 1e6
-        max_latency: 100.0
-        min_reliability: 0.95
-
-# Network slice parameters
-slicing:
-    slice_probabilities:
-        embb: 0.4
-        urllc: 0.3
-        mmtc: 0.3
-    slice_weights:
-        embb: 0.4
-        urllc: 0.4
-        mmtc: 0.2
-
-qos_weights:
-    embb:
-        throughput: 0.7
-        delay: 0.2
-        reliability: 0.1
-    urllc:
-        throughput: 0.1
-        delay: 0.5      # CRITICAL
-        reliability: 0.4  # CRITICAL
-    mmtc:
-        throughput: 0.2
-        delay: 0.1
-        reliability: 0.7
-
-# UAV constraints and capabilities
-uav_params:
-    max_power: 10.0 # Watts
-    battery_capacity: 800000.0 # Joules
-    velocity_max: 3.0 # m/s maximum movement speed
-    initial_power: 5.0 # Initial power setting
-    initial_battery: 800000.0 # Initial battery level
-    beam_angle: 60.0 # degrees - Maximum beam angle (half-angle from vertical)
-    buffer_size: 1000000  # bits
-
-# User Equipment dynamics
-ue_dynamics:
-    arrival_rate: 1.5 # New UEs per second
-    departure_rate: 0.3 # Probability of UE leaving per minute
-    max_ues_multiplier: 1.5 # max_ues = num_ues * multiplier
-    session_duration_avg: 300 # Average session duration in seconds
-    max_initial_velocity: 2.0 # m/s
-    patterns:
-        walk:
-            speed: 0.1 # m/s
-            probability: 0.5
-        vehicle:
-            speed: 1.0 # m/s
-            probability: 0.3
-        stationary:
-            speed: 0.0 # m/s
-            probability: 0.2
-    change_direction_prob: 0.3 # Probability of changing direction per large time-scale step
-
-# Traffic model of slices
-traffic_patterns:
-    embb:
-        packet_size: 1500
-        avg_arrival_rate: 50
-    urllc:
-        packet_size: 200
-        avg_arrival_rate: 100
-    mmtc:
-        packet_size: 200
-        avg_arrival_rate: 5
-
-# Distance-based classification thresholds (used for DA formation)
-da_distance_thresholds:
-    near_max: 300.0 # meters - "Near" SINR level externally
-    medium_max: 600.0 # meters - "Medium" SINR level externally
-        # > 700m is "Far" SINR level externally
-
-# SINR thresholds for quality assessment
-sinr_thresholds:
-    low_max: 10.0 # dB
-    medium_max:
-        20.0 # dB
-        # > 20 dB is high quality
-
-# Environment behavior settings
-behavior:
-    print_stats: true # Print initialization statistics
-    boundary_handling: "bounce" # How UEs handle boundaries: "bounce", "wrap", "stop"
-    periodic_cleanup: true # Remove inactive UEs periodically
-
-# Reward function weights
-reward_weights:
-    qos: 6.5 # QoS satisfaction weight
-    energy: 2.5 # Energy efficiency weight
-    fairness: 1 # Fairness weight
-
-# Energy consumption models
-energy_models:
-    horizontal_energy_factor: 0.1 # Energy per meter of UAV's movement
-    vertical_energy_factor: 0.15 # Energy per meter of UAV's vertical movement
-    transmission_energy_factor: 1.0 # Base transmission energy multiplier
-
-# Air to ground channel model
 a2g:
-    a: 4.88
-    b: 0.43
-    eta_los: 0.1 # dB
-    eta_nlos: 21.0 # dB
+  a: 4.88
+  b: 0.43
+  eta_los: 0.1
+  eta_nlos: 21.0
+behavior:
+  boundary_handling: bounce
+  periodic_cleanup: true
+  print_stats: true
+channel:
+  carrier_frequency: 2.0e9
+  noise_power: 1e-13
+  rb_bandwidth: 360e3
+  total_bandwidth: 600e6
+da_distance_thresholds:
+  medium_max: 600.0
+  near_max: 300.0
+energy_models:
+  horizontal_energy_factor: 0.1
+  transmission_energy_factor: 1.0
+  vertical_energy_factor: 0.15
+packet_rates:
+  embb: 50
+  mmtc: 1
+  urllc: 100
+qos_profiles:
+  embb:
+    max_latency: 10.0
+    min_rate: 100e6
+    min_reliability: 0.99
+  mmtc:
+    max_latency: 100.0
+    min_rate: 1e6
+    min_reliability: 0.95
+  urllc:
+    max_latency: 1.0
+    min_rate: 10e6
+    min_reliability: 0.9999
+qos_weights:
+  embb:
+    delay: 0.2
+    reliability: 0.1
+    throughput: 0.7
+  mmtc:
+    delay: 0.1
+    reliability: 0.7
+    throughput: 0.2
+  urllc:
+    delay: 0.5
+    reliability: 0.4
+    throughput: 0.1
+reward_weights:
+  energy: 2.5
+  fairness: 1
+  qos: 6.5
+sinr_thresholds:
+  low_max: 10.0
+  medium_max: 20.0
+slicing:
+  slice_probabilities:
+    embb: 0.6327073135761387
+    mmtc: 0.09307000678845165
+    urllc: 0.2742226796354097
+  slice_weights:
+    embb: 0.4
+    mmtc: 0.2
+    urllc: 0.4
+system:
+  num_das_per_slice: 3
+  num_uavs: 3
+  num_ues: 200
+  service_area:
+  - 2000
+  - 2000
+  uav_fly_range_h:
+  - 100
+  - 400
+  uav_fly_range_x:
+  - 0
+  - 2000
+  uav_fly_range_y:
+  - 0
+  - 2000
+time:
+  T_L: 60.0
+  T_S: 0.01
+traffic_patterns:
+  embb:
+    avg_arrival_rate: 50
+    packet_size: 1500
+  mmtc:
+    avg_arrival_rate: 5
+    packet_size: 200
+  urllc:
+    avg_arrival_rate: 100
+    packet_size: 200
+uav_params:
+  battery_capacity: 800000.0
+  beam_angle: 60.0
+  buffer_size: 1000000
+  initial_battery: 800000.0
+  initial_power: 5.0
+  max_power: 10.0
+  velocity_max: 3.0
+ue_dynamics:
+  arrival_rate: 4.5398553732799956
+  change_direction_prob: 0.3
+  departure_rate: 2.222825647501353
+  max_initial_velocity: 2.0
+  max_ues_multiplier: 1.5
+  patterns:
+    stationary:
+      probability: 0.46935888342983817
+      speed: 0.0
+    vehicle:
+      probability: 0.2654713699682142
+      speed: 1.0
+    walk:
+      probability: 0.2651697466019476
+      speed: 0.1
+  session_duration_avg: 300
